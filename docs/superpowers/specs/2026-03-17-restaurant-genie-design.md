@@ -171,22 +171,36 @@ The top 5 closest matches are shown with name, rating, price level, and distance
 
 - **Algorithm:** LightGBM binary classifier
 
-### Validation strategy
+### Data splits
 
-Geographic cross-validation throughout: cities are split 80/20 (train cities / held-out test cities). The model never sees any restaurant from test cities during training or hyperparameter search. All CV scores reported below are computed on the held-out test cities.
+All splits are done before any model fitting begins:
+
+```
+All cities
+├── test_cities (20%, geographic split)    — held out until final evaluation only;
+│                                            never used for training, feature selection,
+│                                            hyperparameter search, or calibration
+└── train_cities (80%, geographic split)
+    ├── calibration_set (20% of train-city restaurants, random)
+    │                   — set aside before any model fitting;
+    │                     used ONLY to fit Platt scaling
+    └── train_search_set (80% of train-city restaurants)
+                        — used for feature selection, hyperparameter search,
+                          and final model refit
+```
 
 ### Feature selection
 
-Before hyperparameter search, run a two-step feature selection to reduce noise and overfitting:
+Performed entirely within `train_search_set` using an internal 5-fold CV to avoid overfitting the feature set to a single split:
 
-1. **SHAP-based elimination:** Train a default LightGBM with all features on the train split. Compute mean absolute SHAP values across the training set. Drop any feature whose mean |SHAP| is below 1% of the top feature's value.
-2. **Permutation importance check:** On the same default model, run sklearn `permutation_importance` on the validation split. Drop any feature whose permutation importance is negative (i.e., the model performs better without it).
+1. **SHAP-based elimination:** Compute mean absolute SHAP values across all 5 CV folds of a default LightGBM trained on `train_search_set`. Drop any feature whose mean |SHAP| across folds is below 1% of the top feature's value.
+2. **Permutation importance check:** For each of the 5 folds, compute `permutation_importance` on the fold's held-out data. Drop any feature whose permutation importance is negative on average across folds.
 
 The surviving feature set is fixed before the hyperparameter search begins.
 
 ### Hyperparameter search
 
-Use `optuna` (or `sklearn` `RandomizedSearchCV` as a fallback) to search the following LightGBM regularization parameters over 50 trials:
+Use `optuna` to search 50 trials over the following LightGBM parameters, evaluated by 5-fold geographic CV ROC-AUC on `train_search_set`:
 
 | Parameter | Search range | Purpose |
 |-----------|-------------|---------|
@@ -194,36 +208,43 @@ Use `optuna` (or `sklearn` `RandomizedSearchCV` as a fallback) to search the fol
 | `max_depth` | 3 – 10 | Limits depth; key overfitting control |
 | `min_child_samples` | 20 – 200 | Min samples per leaf; prevents small splits |
 | `lambda_l1` | 0.0 – 5.0 | L1 regularization |
-| `lambda_l2` | 0.0 5.0 | L2 regularization |
+| `lambda_l2` | 0.0 – 5.0 | L2 regularization |
 | `feature_fraction` | 0.5 – 1.0 | Column subsampling per tree |
 | `bagging_fraction` | 0.5 – 1.0 | Row subsampling per tree |
-| `learning_rate` | 0.01 – 0.2 | Step size (use early stopping to set n_estimators) |
+| `learning_rate` | 0.01 – 0.2 | Step size; use early stopping per fold to set `n_estimators` |
 
-Each trial is evaluated using geographic cross-validation ROC-AUC on the train cities (5-fold, stratified by city). The trial with the best mean CV ROC-AUC is selected.
+### Model selection and refit
 
-### Model selection rule
+> The combination of (surviving features + best hyperparameters) = the selected model.
 
-> The combination of (selected features + best hyperparameters) that achieves the highest mean geographic CV ROC-AUC is the model saved to `models/model.pkl`. This is the same model used at prediction time — no refit on full data after selection.
+After the best hyperparameters are identified, **refit the base LightGBM on all of `train_search_set`** using those hyperparameters and the selected features. This is `base_lgbm`. Refitting on all available train data (rather than keeping one CV fold's model) ensures the production model uses the full training signal.
 
 ### Calibration
 
-The selected model is wrapped in `sklearn.calibration.CalibratedClassifierCV` (method='sigmoid', Platt scaling). Calibration is fitted on the held-out test cities to avoid data leakage.
+```python
+calibrated_model = CalibratedClassifierCV(base_lgbm, cv='prefit', method='sigmoid')
+calibrated_model.fit(calibration_set_X, calibration_set_y)
+```
+
+`cv='prefit'` means `base_lgbm` is already fitted; only the Platt sigmoid layer is fitted on `calibration_set`. Because `calibration_set` is never used for training or evaluation, there is no leakage.
+
+`calibrated_model` is saved as `models/model.pkl`.
+
+### Explainability
+
+`base_lgbm` (the pre-fitted LightGBM) is passed directly to `shap.TreeExplainer(base_lgbm)`. With `cv='prefit'`, `calibrated_model.estimator` is `base_lgbm`. The TreeExplainer object is saved as `models/shap_explainer.pkl`. Top positive SHAP features → Pros; top negative → Cons.
 
 ### Reported performance
 
-`train_model.py` prints and saves a performance report to `models/performance_report.txt`:
+`train_model.py` prints and saves `models/performance_report.txt`. Test-city evaluation is the first and only time `test_cities` data is touched:
 
 ```
 Feature selection: 18 of 23 features retained
 Best hyperparameters: {num_leaves: 47, max_depth: 6, ...}
-Geographic CV ROC-AUC (train cities, 5-fold): 0.72 ± 0.04
-Test-city ROC-AUC:                            0.69
-Calibration: Brier score = 0.21
+Geographic CV ROC-AUC (train_search_set, 5-fold): 0.72 ± 0.04
+Test-city ROC-AUC (held-out, uncalibrated):       0.69
+Test-city Brier score (calibrated model):          0.21
 ```
-
-### Explainability
-
-SHAP TreeExplainer on the uncalibrated LightGBM base estimator. Because `CalibratedClassifierCV` wraps the base model, the base estimator must be extracted before passing to SHAP: `base_lgbm = calibrated_model.calibrated_classifiers_[0].estimator`. This base estimator is saved separately as `models/shap_explainer.pkl` (as a SHAP TreeExplainer object). Top positive SHAP features → Pros; top negative → Cons.
 
 ---
 
