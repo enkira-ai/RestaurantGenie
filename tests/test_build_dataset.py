@@ -35,7 +35,7 @@ def test_enrich_with_osm_features_adds_poi_columns(small_restaurant_df, mocker):
     mock_resp.json.return_value = FAKE_OSM_RESPONSE
     mock_resp.raise_for_status.return_value = None
     mocker.patch("src.features.requests.post", return_value=mock_resp)
-    mocker.patch("time.sleep")  # don't actually sleep in tests
+    mocker.patch("src.build_dataset.time.sleep")  # don't actually sleep in tests
 
     result = enrich_with_osm_features(small_restaurant_df)
 
