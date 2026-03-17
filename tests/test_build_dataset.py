@@ -58,7 +58,7 @@ def test_enrich_with_census_adds_demographic_columns(small_restaurant_df, mocker
     mock_resp = MagicMock()
     mock_resp.json.return_value = FAKE_CENSUS_ACS_RESPONSE
     mock_resp.raise_for_status.return_value = None
-    mocker.patch("src.features.requests.get", return_value=mock_resp)
+    mocker.patch("src.build_dataset.requests.get", return_value=mock_resp)
 
     result = enrich_with_census(small_restaurant_df)
 
@@ -66,6 +66,9 @@ def test_enrich_with_census_adds_demographic_columns(small_restaurant_df, mocker
     assert "total_population" in result.columns
     assert "median_age" in result.columns
     assert len(result) == len(small_restaurant_df)
+    assert result["median_income"].iloc[0] == 75000.0
+    assert result["total_population"].iloc[0] == 50000.0
+    assert result["median_age"].iloc[0] == 34.0
 
 
 def test_enrich_with_census_caches_fips(small_restaurant_df, mocker):
