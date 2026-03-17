@@ -82,6 +82,39 @@ def load_yelp_businesses(jsonl_path: str | Path) -> pd.DataFrame:
 _OSM_PADDING_DEG = 0.014  # ~1.5km padding around city bounding box
 
 
+def compute_success_labels(df: pd.DataFrame, p95_log_reviews: float) -> pd.DataFrame:
+    """Add success_score and is_successful columns."""
+    df = df.copy()
+    df["_norm_rating"] = (df["rating"].fillna(3.0) - 1.0) / 4.0
+    df["_norm_log_reviews"] = (
+        np.log1p(df["review_count"].fillna(0)) / max(p95_log_reviews, 1e-6)
+    )
+    df["success_score"] = (
+        0.4 * df["_norm_rating"]
+        + 0.4 * df["_norm_log_reviews"].clip(upper=1.0)
+        + 0.2 * df["is_open"].fillna(0)
+    )
+
+    # Fill cuisine NaN with 'other' to avoid silent NaN key drops in groupby
+    df["_cuisine_filled"] = df["cuisine"].fillna("other")
+
+    # Merge small cuisine groups into 'other'
+    cuisine_counts = df.groupby(["city", "_cuisine_filled"]).transform("size")
+    df["_cuisine_group"] = df["_cuisine_filled"].where(cuisine_counts >= 10, other="other")
+
+    # Compute 70th percentile threshold per (city, cuisine_group) using merge
+    thresholds = (
+        df.groupby(["city", "_cuisine_group"])["success_score"]
+        .quantile(0.70)
+        .reset_index()
+        .rename(columns={"success_score": "_threshold"})
+    )
+    df = df.merge(thresholds, on=["city", "_cuisine_group"], how="left")
+    df["is_successful"] = (df["success_score"] > df["_threshold"]).astype(int)
+    df = df.drop(columns=["_norm_rating", "_norm_log_reviews", "_cuisine_filled", "_cuisine_group", "_threshold"])
+    return df
+
+
 def enrich_with_osm_features(df: pd.DataFrame) -> pd.DataFrame:
     """Batch OSM POI enrichment: one Overpass query per city."""
     rows_with_features = []

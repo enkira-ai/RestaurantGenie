@@ -1,3 +1,5 @@
+import numpy as np
+import pandas as pd
 from unittest.mock import MagicMock
 from tests.conftest import FAKE_OSM_RESPONSE, FAKE_CENSUS_ACS_RESPONSE
 
@@ -90,3 +92,29 @@ def test_enrich_with_census_caches_fips(small_restaurant_df, mocker):
 
     # 4 restaurants but only 1 unique FIPS → ACS should be called once
     assert acs_mock.call_count == 1
+
+
+def test_compute_success_labels_creates_column(small_restaurant_df):
+    from src.build_dataset import compute_success_labels
+    p95 = float(np.log1p(small_restaurant_df["review_count"]).quantile(0.95))
+    result = compute_success_labels(small_restaurant_df, p95_log_reviews=p95)
+    assert "success_score" in result.columns
+    assert "is_successful" in result.columns
+    assert result["is_successful"].isin([0, 1]).all()
+
+
+def test_compute_success_labels_small_groups_merged():
+    """Groups <10 restaurants → cuisine='other' for percentile calculation."""
+    from src.build_dataset import compute_success_labels
+    df = pd.DataFrame({
+        "city": ["NYC"] * 5 + ["NYC"] * 15,
+        "cuisine": ["rare_cuisine"] * 5 + ["italian"] * 15,
+        "rating": [4.0] * 20,
+        "review_count": [100] * 20,
+        "is_open": [1] * 20,
+    })
+    p95 = float(np.log1p(df["review_count"]).quantile(0.95))
+    result = compute_success_labels(df, p95_log_reviews=p95)
+    # Rare cuisine group (5 rows) merged into 'other' — no crash
+    assert "is_successful" in result.columns
+    assert len(result) == 20
