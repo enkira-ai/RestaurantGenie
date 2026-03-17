@@ -52,3 +52,37 @@ def test_count_pois_by_type_empty_returns_zeros():
     assert result["bars_250m"] == 0
     assert result["restaurants_500m"] == 0
     assert result["transit_stops_1000m"] == 0
+
+
+def test_fetch_census_demographics_returns_expected_fields(mocker):
+    from src.features import fetch_census_demographics
+    from tests.conftest import FAKE_CENSUS_ACS_RESPONSE
+    from unittest.mock import MagicMock
+    mocker.patch(
+        "censusgeocode.CensusGeocode.coordinates",
+        return_value=[{
+            "geographies": {
+                "Census Tracts": [{"TRACT": "001000", "COUNTY": "003", "STATE": "32"}]
+            }
+        }],
+    )
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = FAKE_CENSUS_ACS_RESPONSE
+    mock_resp.raise_for_status.return_value = None
+    mocker.patch("src.features.requests.get", return_value=mock_resp)
+    result = fetch_census_demographics(36.17, -115.14)
+    assert result["median_income"] == 75000.0
+    assert result["total_population"] == 50000.0
+    assert result["median_age"] == 34.0
+
+
+def test_fetch_census_demographics_handles_missing_tract(mocker):
+    from src.features import fetch_census_demographics
+    mocker.patch(
+        "censusgeocode.CensusGeocode.coordinates",
+        return_value=[{"geographies": {"Census Tracts": []}}],
+    )
+    result = fetch_census_demographics(0.0, 0.0)
+    assert result["median_income"] is None
+    assert result["total_population"] is None
+    assert result["median_age"] is None

@@ -1,9 +1,55 @@
+import os
 import time
 import requests
 import numpy as np
+import censusgeocode as cg
 from sklearn.neighbors import BallTree
 
+CENSUS_API_KEY = os.environ.get("CENSUS_API_KEY", "")
+CENSUS_ACS_URL = "https://api.census.gov/data/2022/acs/acs5"
+_CENSUS_VARS = "B19013_001E,B01003_001E,B01002_001E"
+
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+
+def fetch_census_demographics(lat: float, lon: float) -> dict:
+    """Return median_income, total_population, median_age for the census tract
+    containing (lat, lon). Returns None values if lookup fails.
+    """
+    null_result = {"median_income": None, "total_population": None, "median_age": None}
+    try:
+        geocode_result = cg.CensusGeocode().coordinates(x=lon, y=lat)
+        tracts = geocode_result[0]["geographies"].get("Census Tracts", [])
+        if not tracts:
+            return null_result
+        tract_info = tracts[0]
+        state = tract_info["STATE"]
+        county = tract_info["COUNTY"]
+        tract = tract_info["TRACT"]
+    except Exception:
+        return null_result
+
+    params = {
+        "get": _CENSUS_VARS,
+        "for": f"tract:{tract}",
+        "in": f"state:{state}+county:{county}",
+    }
+    if CENSUS_API_KEY:
+        params["key"] = CENSUS_API_KEY
+
+    try:
+        resp = requests.get(CENSUS_ACS_URL, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        header, values = data[0], data[1]
+        row = dict(zip(header, values))
+        return {
+            "median_income": float(row["B19013_001E"]) if row["B19013_001E"] else None,
+            "total_population": float(row["B01003_001E"]) if row["B01003_001E"] else None,
+            "median_age": float(row["B01002_001E"]) if row["B01002_001E"] else None,
+        }
+    except Exception:
+        return null_result
 EARTH_RADIUS_M = 6_371_000
 RADII_M = [250, 500, 1000]
 
