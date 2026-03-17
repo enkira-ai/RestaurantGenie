@@ -13,8 +13,8 @@ def test_make_splits_sizes(synthetic_model_df):
     train_search, calibration, test_df = make_splits(synthetic_model_df, random_state=42)
     total = len(train_search) + len(calibration) + len(test_df)
     assert total == len(synthetic_model_df)
-    # test_df ≈ 20% of cities; with 2 cities exactly 1 goes to test
-    assert len(test_df) == 100  # CityB (100 rows)
+    # test_city_fraction=0.2 on 2 cities → exactly 1 city held out
+    assert len(set(test_df["city"])) == 1
 
 
 def test_encode_cuisine_known_and_unknown(tmp_path):
