@@ -1,5 +1,8 @@
 # tests/test_train_model.py
 
+import pandas as pd
+
+
 def test_make_splits_test_cities_are_disjoint(synthetic_model_df):
     from src.train_model import make_splits
     train_search, calibration, test_df = make_splits(synthetic_model_df, random_state=42)
@@ -120,3 +123,41 @@ def test_save_and_load_model_artifacts(synthetic_model_df, tmp_path):
     loaded = pickle.loads((tmp_path / "model.pkl").read_bytes())
     proba = loaded.predict_proba(X[160:])[:, 1]
     assert proba.min() >= 0.0
+
+
+def test_train_model_end_to_end(synthetic_model_df, tmp_path):
+    """Smoke test: full pipeline runs without error and creates all artifacts."""
+    from src.train_model import train_model
+    import json
+
+    parquet_path = tmp_path / "restaurant_features.parquet"
+    params_path = tmp_path / "normalization_params.json"
+    models_dir = tmp_path / "models"
+
+    df = synthetic_model_df.copy()
+    df.to_parquet(parquet_path)
+    params_path.write_text(json.dumps({
+        "p95_log_reviews": 5.3,
+        "cuisine_label_map": {"other": 0, "italian": 1, "mexican": 2, "chinese": 3},
+    }))
+
+    train_model(
+        parquet_path=parquet_path,
+        params_path=params_path,
+        models_dir=models_dir,
+        n_trials=2,   # smoke test: 2 optuna trials
+    )
+
+    assert (models_dir / "model.pkl").exists()
+    assert (models_dir / "shap_explainer.pkl").exists()
+    assert (models_dir / "performance_report.txt").exists()
+    df_out = pd.read_parquet(parquet_path)
+    assert "predicted_probability" in df_out.columns
+    # Verify performance_report.txt content
+    report = (models_dir / "performance_report.txt").read_text()
+    assert "Test-city ROC-AUC" in report
+    assert "Test-city Brier score" in report
+    assert "Selected features" in report
+    # Verify predicted_probability values are valid probabilities
+    proba = df_out["predicted_probability"]
+    assert proba.min() >= 0.0 and proba.max() <= 1.0

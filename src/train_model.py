@@ -185,6 +185,9 @@ def search_hyperparameters(
             proba = model.predict_proba(X_val)[:, 1]
             scores.append(roc_auc_score(y_val, proba))
 
+        if not scores:
+            trial.set_user_attr("mean_n_estimators", 100.0)
+            return 0.5
         trial.set_user_attr("mean_n_estimators", float(np.mean(n_estimators_list)))
         return float(np.mean(scores))
 
@@ -248,3 +251,108 @@ def save_artifacts(
         json.dump(params, f, indent=2)
 
     print(f"Saved model artifacts to {model_dir}/")
+
+
+def evaluate_on_test(
+    calibrated_model, base_lgbm, X_test: np.ndarray, y_test: np.ndarray
+) -> dict:
+    """Returns test metrics: uncalibrated ROC-AUC (base model) and calibrated Brier score."""
+    proba_cal = calibrated_model.predict_proba(X_test)[:, 1]
+    proba_raw = base_lgbm.predict_proba(X_test)[:, 1]
+    return {
+        "test_roc_auc_uncalibrated": roc_auc_score(y_test, proba_raw),
+        "test_brier_calibrated": brier_score_loss(y_test, proba_cal),
+    }
+
+
+def train_model(
+    parquet_path: str | Path,
+    params_path: str | Path,
+    models_dir: str | Path,
+    n_trials: int = 50,
+    random_state: int = 42,
+) -> None:
+    """Full Stage 2 pipeline."""
+    models_dir = Path(models_dir)
+
+    print("Loading dataset...")
+    df = pd.read_parquet(parquet_path)
+    df, label_map = encode_cuisine_column(df, params_path)
+
+    # Ensure all feature columns exist
+    for col in FEATURE_COLS:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    print("Making data splits...")
+    train_search, calibration_set, test_df = make_splits(df, random_state=random_state)
+
+    X_ts = train_search[FEATURE_COLS].values.astype(float)
+    y_ts = train_search[TARGET_COL].values
+    cities_ts = train_search["city"].values
+    X_cal = calibration_set[FEATURE_COLS].values.astype(float)
+    y_cal = calibration_set[TARGET_COL].values
+    X_test = test_df[FEATURE_COLS].values.astype(float)
+    y_test = test_df[TARGET_COL].values
+
+    print("Running feature selection...")
+    selected_features = select_features(X_ts, y_ts, feature_names=FEATURE_COLS)
+    if not selected_features:
+        print("Warning: no features survived selection, falling back to all features.")
+        selected_features = FEATURE_COLS
+    feat_idx = [FEATURE_COLS.index(f) for f in selected_features]
+    X_ts_sel = X_ts[:, feat_idx]
+    X_cal_sel = X_cal[:, feat_idx]
+    X_test_sel = X_test[:, feat_idx]
+
+    print(f"Running Optuna search ({n_trials} trials)...")
+    best_params, mean_cv_n_est, best_cv_score = search_hyperparameters(
+        X_ts_sel, y_ts, cities=cities_ts, n_trials=n_trials, random_state=random_state
+    )
+
+    n_estimators = round(mean_cv_n_est * 1.25)
+    print(f"Refitting with n_estimators={n_estimators}...")
+    calibrated_model, base_lgbm = fit_final_model(
+        X_ts_sel, y_ts, X_cal_sel, y_cal, best_params, n_estimators
+    )
+
+    print("Evaluating on test cities...")
+    metrics = evaluate_on_test(calibrated_model, base_lgbm, X_test_sel, y_test)
+
+    save_artifacts(
+        calibrated_model=calibrated_model,
+        base_lgbm=base_lgbm,
+        selected_features=selected_features,
+        best_params=best_params,
+        params_path=params_path,
+        model_dir=models_dir,
+    )
+
+    # Score all rows and write predicted_probability back to parquet
+    X_all = df[FEATURE_COLS].values.astype(float)[:, feat_idx]
+    df["predicted_probability"] = calibrated_model.predict_proba(X_all)[:, 1]
+    df.to_parquet(parquet_path, index=False)
+    print("Wrote predicted_probability to parquet.")
+
+    # Performance report
+    report_lines = [
+        f"Feature selection: {len(selected_features)} of {len(FEATURE_COLS)} features retained",
+        f"Selected features: {selected_features}",
+        f"Best hyperparameters: {best_params}",
+        f"n_estimators (refit): {n_estimators}",
+        f"Geographic CV ROC-AUC (train_search_set, 5-fold): {best_cv_score:.4f}",
+        f"Test-city ROC-AUC (held-out, uncalibrated): {metrics['test_roc_auc_uncalibrated']:.4f}",
+        f"Test-city Brier score (calibrated): {metrics['test_brier_calibrated']:.4f}",
+    ]
+    report = "\n".join(report_lines)
+    print("\n=== Performance Report ===")
+    print(report)
+    (models_dir / "performance_report.txt").write_text(report)
+
+
+if __name__ == "__main__":
+    train_model(
+        parquet_path="data/processed/restaurant_features.parquet",
+        params_path="models/normalization_params.json",
+        models_dir="models",
+    )
