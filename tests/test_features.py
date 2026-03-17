@@ -85,3 +85,38 @@ def test_fetch_census_demographics_handles_missing_tract(mocker):
     assert result["median_income"] is None
     assert result["total_population"] is None
     assert result["median_age"] is None
+
+
+def test_generate_neighborhood_features_shape(mocker):
+    from src.features import generate_neighborhood_features
+    from tests.conftest import FAKE_OSM_RESPONSE, FAKE_CENSUS_ACS_RESPONSE
+    from unittest.mock import MagicMock
+    mock_osm = MagicMock()
+    mock_osm.json.return_value = FAKE_OSM_RESPONSE
+    mock_osm.raise_for_status.return_value = None
+    mocker.patch("src.features.requests.post", return_value=mock_osm)
+    mocker.patch(
+        "censusgeocode.CensusGeocode.coordinates",
+        return_value=[{"geographies": {"Census Tracts": [
+            {"TRACT": "001000", "COUNTY": "003", "STATE": "32"}
+        ]}}],
+    )
+    mock_census = MagicMock()
+    mock_census.json.return_value = FAKE_CENSUS_ACS_RESPONSE
+    mock_census.raise_for_status.return_value = None
+    mocker.patch("src.features.requests.get", return_value=mock_census)
+
+    result = generate_neighborhood_features(36.17, -115.14)
+
+    # Spot-check keys
+    assert "restaurants_500m" in result
+    assert "bars_1000m" in result
+    assert "offices_250m" in result
+    assert "transit_stops_500m" in result
+    assert "schools_1000m" in result
+    assert "median_income" in result
+    assert "total_population" in result
+    assert "median_age" in result
+    # cuisine and price_level are NOT in the result (caller appends them)
+    assert "cuisine_encoded" not in result
+    assert "price_level" not in result

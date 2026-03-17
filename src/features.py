@@ -136,6 +136,26 @@ def count_pois_by_type(
     return result
 
 
+_PADDING_DEG = 0.012   # ~1.3km padding each side
+
+
+def generate_neighborhood_features(
+    lat: float,
+    lon: float,
+    target_cuisine: str | None = None,
+) -> dict:
+    """Live OSM + Census feature generation for a single location.
+    Caller must append cuisine_encoded and price_level before model input.
+    """
+    pois = fetch_pois_for_bbox(
+        lat - _PADDING_DEG, lon - _PADDING_DEG,
+        lat + _PADDING_DEG, lon + _PADDING_DEG,
+    )
+    poi_counts = count_pois_by_type(lat, lon, pois, target_cuisine=target_cuisine)
+    demographics = fetch_census_demographics(lat, lon)
+    return {**poi_counts, **demographics}
+
+
 def fetch_pois_for_bbox(
     south: float, west: float, north: float, east: float
 ) -> list[dict]:
