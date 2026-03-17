@@ -101,6 +101,12 @@ def test_compute_success_labels_creates_column(small_restaurant_df):
     assert "success_score" in result.columns
     assert "is_successful" in result.columns
     assert result["is_successful"].isin([0, 1]).all()
+    # Verify score formula: rating=4.5 → norm=(4.5-1)/4=0.875; reviews=200 → log1p/p95
+    biz1 = result[result["business_id"] == "biz1"].iloc[0]
+    expected_score = 0.4 * (4.5 - 1.0) / 4.0 + 0.4 * np.log1p(200) / p95 + 0.2 * 1.0
+    assert abs(biz1["success_score"] - expected_score) < 1e-6
+    # Highest-rated (biz4, rating=4.8, reviews=500) should score highest
+    assert result.loc[result["business_id"] == "biz4", "success_score"].values[0] == result["success_score"].max()
 
 
 def test_compute_success_labels_small_groups_merged():

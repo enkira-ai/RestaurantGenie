@@ -91,7 +91,7 @@ def compute_success_labels(df: pd.DataFrame, p95_log_reviews: float) -> pd.DataF
     )
     df["success_score"] = (
         0.4 * df["_norm_rating"]
-        + 0.4 * df["_norm_log_reviews"].clip(upper=1.0)
+        + 0.4 * df["_norm_log_reviews"]
         + 0.2 * df["is_open"].fillna(0)
     )
 
