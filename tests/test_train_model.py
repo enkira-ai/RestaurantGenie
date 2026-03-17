@@ -70,3 +70,53 @@ def test_search_hyperparameters_returns_params_and_n_estimators(synthetic_model_
     assert "learning_rate" in best_params
     assert mean_n_est > 0
     assert 0.0 <= best_cv_score <= 1.0
+
+
+def test_fit_final_model_produces_calibrated_output(synthetic_model_df):
+    from src.train_model import fit_final_model, FEATURE_COLS, TARGET_COL
+    import numpy as np
+    df = synthetic_model_df
+    X_train = df[FEATURE_COLS].fillna(0).values[:160]
+    y_train = df[TARGET_COL].values[:160]
+    X_cal = df[FEATURE_COLS].fillna(0).values[160:]
+    y_cal = df[TARGET_COL].values[160:]
+    best_params = {"num_leaves": 31, "max_depth": 5, "min_child_samples": 20,
+                   "lambda_l1": 0.1, "lambda_l2": 0.1, "feature_fraction": 0.8,
+                   "bagging_fraction": 0.8, "learning_rate": 0.05}
+    calibrated, base_lgbm = fit_final_model(
+        X_train, y_train, X_cal, y_cal, best_params, n_estimators=50
+    )
+    proba = calibrated.predict_proba(X_cal)[:, 1]
+    assert proba.min() >= 0.0 and proba.max() <= 1.0
+    assert calibrated.estimator is base_lgbm
+
+
+def test_save_and_load_model_artifacts(synthetic_model_df, tmp_path):
+    from src.train_model import fit_final_model, save_artifacts, FEATURE_COLS, TARGET_COL
+    import pickle
+    df = synthetic_model_df
+    X = df[FEATURE_COLS].fillna(0).values
+    y = df[TARGET_COL].values
+    best_params = {"num_leaves": 15, "learning_rate": 0.1, "max_depth": 3,
+                   "min_child_samples": 20, "lambda_l1": 0, "lambda_l2": 0,
+                   "feature_fraction": 0.8, "bagging_fraction": 0.8}
+    calibrated, base_lgbm = fit_final_model(X[:160], y[:160], X[160:], y[160:], best_params, n_estimators=20)
+
+    params_path = tmp_path / "normalization_params.json"
+    import json
+    params_path.write_text(json.dumps({"p95_log_reviews": 5.3, "cuisine_label_map": {"other": 0}}))
+
+    save_artifacts(
+        calibrated_model=calibrated,
+        base_lgbm=base_lgbm,
+        selected_features=FEATURE_COLS,
+        best_params=best_params,
+        params_path=params_path,
+        model_dir=tmp_path,
+    )
+
+    assert (tmp_path / "model.pkl").exists()
+    assert (tmp_path / "shap_explainer.pkl").exists()
+    loaded = pickle.loads((tmp_path / "model.pkl").read_bytes())
+    proba = loaded.predict_proba(X[160:])[:, 1]
+    assert proba.min() >= 0.0

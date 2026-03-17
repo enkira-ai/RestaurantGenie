@@ -174,3 +174,53 @@ def search_hyperparameters(
     best_cv_score = float(best_trial.value)
     print(f"Best CV ROC-AUC: {best_cv_score:.4f} | mean n_estimators: {mean_n_est:.0f}")
     return best_params, mean_n_est, best_cv_score
+
+
+def fit_final_model(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_cal: np.ndarray,
+    y_cal: np.ndarray,
+    best_params: dict,
+    n_estimators: int,
+) -> tuple:
+    """Refit LightGBM on train_search_set, calibrate on calibration_set.
+    Returns (calibrated_model, base_lgbm).
+    """
+    params = {**best_params, "verbose": -1, "random_state": 42}
+    base_lgbm = lgb.LGBMClassifier(n_estimators=n_estimators, **params)
+    base_lgbm.fit(X_train, y_train)
+
+    calibrated = CalibratedClassifierCV(base_lgbm, cv=None, method="sigmoid")
+    calibrated.fit(X_cal, y_cal)
+    return calibrated, base_lgbm
+
+
+def save_artifacts(
+    calibrated_model,
+    base_lgbm,
+    selected_features: list[str],
+    best_params: dict,
+    params_path: str | Path,
+    model_dir: str | Path,
+) -> None:
+    """Save model.pkl, shap_explainer.pkl, updated normalization_params.json."""
+    model_dir = Path(model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(model_dir / "model.pkl", "wb") as f:
+        pickle.dump(calibrated_model, f)
+
+    explainer = shap.TreeExplainer(base_lgbm)
+    with open(model_dir / "shap_explainer.pkl", "wb") as f:
+        pickle.dump(explainer, f)
+
+    # Update normalization_params.json with selected_features and best_params
+    with open(params_path) as f:
+        params = json.load(f)
+    params["selected_features"] = selected_features
+    params["best_hyperparameters"] = best_params
+    with open(params_path, "w") as f:
+        json.dump(params, f, indent=2)
+
+    print(f"Saved model artifacts to {model_dir}/")
