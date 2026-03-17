@@ -189,3 +189,50 @@ def enrich_with_census(df: pd.DataFrame) -> pd.DataFrame:
         rows.append({**row.to_dict(), **demo})
 
     return pd.DataFrame(rows)
+
+
+def build_dataset(
+    yelp_jsonl_path: str | Path,
+    output_parquet: str | Path,
+    output_params: str | Path,
+) -> None:
+    """Full Stage 1 pipeline. Saves parquet + normalization_params.json."""
+    print("Loading Yelp data...")
+    df = load_yelp_businesses(yelp_jsonl_path)
+    print(f"  {len(df)} restaurants loaded.")
+
+    print("Computing normalization params...")
+    p95_log_reviews = float(np.log1p(df["review_count"].fillna(0)).quantile(0.95))
+
+    # Cuisine label map: sorted unique cuisines → int; None/'other' → 0
+    cuisines = sorted({c for c in df["cuisine"].dropna().unique()})
+    cuisine_label_map = {"other": 0}
+    for i, c in enumerate(cuisines, start=1):
+        cuisine_label_map[c] = i
+
+    params = {"p95_log_reviews": p95_log_reviews, "cuisine_label_map": cuisine_label_map}
+    Path(output_params).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_params, "w") as f:
+        json.dump(params, f)
+    print(f"  Saved normalization params to {output_params}")
+
+    print("Enriching with OSM features (batched by city)...")
+    df = enrich_with_osm_features(df)
+
+    print("Enriching with Census demographics...")
+    df = enrich_with_census(df)
+
+    print("Computing success labels...")
+    df = compute_success_labels(df, p95_log_reviews=p95_log_reviews)
+
+    Path(output_parquet).parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(output_parquet, index=False)
+    print(f"  Saved {len(df)} rows to {output_parquet}")
+
+
+if __name__ == "__main__":
+    build_dataset(
+        yelp_jsonl_path="data/raw/yelp_academic_dataset_business.json",
+        output_parquet="data/processed/restaurant_features.parquet",
+        output_params="models/normalization_params.json",
+    )
