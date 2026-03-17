@@ -170,10 +170,60 @@ The top 5 closest matches are shown with name, rating, price level, and distance
 ## Model
 
 - **Algorithm:** LightGBM binary classifier
-- **Calibration:** Wrapped in `sklearn.calibration.CalibratedClassifierCV` (method='sigmoid', Platt scaling) so that the output probability is meaningful (0.71 means approximately 71% of comparable-situation restaurants succeed), not just an uncalibrated score
-- **Validation:** Geographic cross-validation — hold out 20% of cities entirely; the model never sees any restaurant from test cities during training
-- **Evaluation metrics:** ROC-AUC, calibration curve
-- **Explainability:** SHAP TreeExplainer on the uncalibrated LightGBM base estimator. Because `CalibratedClassifierCV` wraps the base model, the base estimator must be extracted before passing to SHAP: `base_lgbm = calibrated_model.calibrated_classifiers_[0].estimator`. This base estimator is saved separately as `models/shap_explainer.pkl` (as a SHAP TreeExplainer object, not the raw model). Top positive SHAP features → Pros; top negative → Cons.
+
+### Validation strategy
+
+Geographic cross-validation throughout: cities are split 80/20 (train cities / held-out test cities). The model never sees any restaurant from test cities during training or hyperparameter search. All CV scores reported below are computed on the held-out test cities.
+
+### Feature selection
+
+Before hyperparameter search, run a two-step feature selection to reduce noise and overfitting:
+
+1. **SHAP-based elimination:** Train a default LightGBM with all features on the train split. Compute mean absolute SHAP values across the training set. Drop any feature whose mean |SHAP| is below 1% of the top feature's value.
+2. **Permutation importance check:** On the same default model, run sklearn `permutation_importance` on the validation split. Drop any feature whose permutation importance is negative (i.e., the model performs better without it).
+
+The surviving feature set is fixed before the hyperparameter search begins.
+
+### Hyperparameter search
+
+Use `optuna` (or `sklearn` `RandomizedSearchCV` as a fallback) to search the following LightGBM regularization parameters over 50 trials:
+
+| Parameter | Search range | Purpose |
+|-----------|-------------|---------|
+| `num_leaves` | 15 – 127 | Controls tree complexity |
+| `max_depth` | 3 – 10 | Limits depth; key overfitting control |
+| `min_child_samples` | 20 – 200 | Min samples per leaf; prevents small splits |
+| `lambda_l1` | 0.0 – 5.0 | L1 regularization |
+| `lambda_l2` | 0.0 5.0 | L2 regularization |
+| `feature_fraction` | 0.5 – 1.0 | Column subsampling per tree |
+| `bagging_fraction` | 0.5 – 1.0 | Row subsampling per tree |
+| `learning_rate` | 0.01 – 0.2 | Step size (use early stopping to set n_estimators) |
+
+Each trial is evaluated using geographic cross-validation ROC-AUC on the train cities (5-fold, stratified by city). The trial with the best mean CV ROC-AUC is selected.
+
+### Model selection rule
+
+> The combination of (selected features + best hyperparameters) that achieves the highest mean geographic CV ROC-AUC is the model saved to `models/model.pkl`. This is the same model used at prediction time — no refit on full data after selection.
+
+### Calibration
+
+The selected model is wrapped in `sklearn.calibration.CalibratedClassifierCV` (method='sigmoid', Platt scaling). Calibration is fitted on the held-out test cities to avoid data leakage.
+
+### Reported performance
+
+`train_model.py` prints and saves a performance report to `models/performance_report.txt`:
+
+```
+Feature selection: 18 of 23 features retained
+Best hyperparameters: {num_leaves: 47, max_depth: 6, ...}
+Geographic CV ROC-AUC (train cities, 5-fold): 0.72 ± 0.04
+Test-city ROC-AUC:                            0.69
+Calibration: Brier score = 0.21
+```
+
+### Explainability
+
+SHAP TreeExplainer on the uncalibrated LightGBM base estimator. Because `CalibratedClassifierCV` wraps the base model, the base estimator must be extracted before passing to SHAP: `base_lgbm = calibrated_model.calibrated_classifiers_[0].estimator`. This base estimator is saved separately as `models/shap_explainer.pkl` (as a SHAP TreeExplainer object). Top positive SHAP features → Pros; top negative → Cons.
 
 ---
 
@@ -221,7 +271,8 @@ RestaurantGenie/
 ├── models/
 │   ├── model.pkl
 │   ├── shap_explainer.pkl
-│   └── normalization_params.json   # p95_log_reviews + cuisine label map
+│   ├── normalization_params.json   # p95_log_reviews + cuisine label map
+│   └── performance_report.txt      # CV score, test-city score, calibration
 ├── src/
 │   ├── build_dataset.py        # Stage 1
 │   ├── train_model.py          # Stage 2
@@ -237,6 +288,7 @@ RestaurantGenie/
 
 ```
 lightgbm
+optuna              # hyperparameter search (RandomizedSearchCV as fallback)
 shap
 pandas
 numpy
