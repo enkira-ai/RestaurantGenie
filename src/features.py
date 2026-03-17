@@ -26,6 +26,68 @@ def _classify_tags(tags: dict) -> str | None:
     return None
 
 
+_TYPE_KEY = {
+    "restaurant": "restaurants",
+    "bar": "bars",
+    "office": "offices",
+    "hotel": "hotels",
+    "transit": "transit_stops",
+    "school": "schools",
+}
+
+
+def count_pois_by_type(
+    lat: float,
+    lon: float,
+    pois: list[dict],
+    radii_m: list[int] = RADII_M,
+    target_cuisine: str | None = None,
+) -> dict:
+    """Count POIs of each type within each radius. Returns flat dict.
+
+    Keys: bars_250m, bars_500m, bars_1000m, restaurants_250m, ...,
+          restaurants_same_cuisine_250m, ... (None when target_cuisine is None)
+    """
+    result: dict = {}
+    center_rad = np.radians([[lat, lon]])
+
+    for poi_type, key_prefix in _TYPE_KEY.items():
+        subset = [p for p in pois if p["type"] == poi_type]
+        if not subset:
+            for r in radii_m:
+                result[f"{key_prefix}_{r}m"] = 0
+            if poi_type == "restaurant":
+                for r in radii_m:
+                    result[f"restaurants_same_cuisine_{r}m"] = None
+            continue
+
+        coords_rad = np.radians([[p["lat"], p["lon"]] for p in subset])
+        tree = BallTree(coords_rad, metric="haversine")
+        for r in radii_m:
+            count = tree.query_radius(center_rad, r=r / EARTH_RADIUS_M, count_only=True)[0]
+            result[f"{key_prefix}_{r}m"] = int(count)
+
+        if poi_type == "restaurant":
+            if target_cuisine:
+                same = [p for p in subset if p.get("cuisine") == target_cuisine]
+                if not same:
+                    for r in radii_m:
+                        result[f"restaurants_same_cuisine_{r}m"] = 0
+                else:
+                    same_rad = np.radians([[p["lat"], p["lon"]] for p in same])
+                    same_tree = BallTree(same_rad, metric="haversine")
+                    for r in radii_m:
+                        count = same_tree.query_radius(
+                            center_rad, r=r / EARTH_RADIUS_M, count_only=True
+                        )[0]
+                        result[f"restaurants_same_cuisine_{r}m"] = int(count)
+            else:
+                for r in radii_m:
+                    result[f"restaurants_same_cuisine_{r}m"] = None
+
+    return result
+
+
 def fetch_pois_for_bbox(
     south: float, west: float, north: float, east: float
 ) -> list[dict]:
