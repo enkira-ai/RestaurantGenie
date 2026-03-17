@@ -108,3 +108,69 @@ def select_features(
     ]
     print(f"Feature selection: {len(selected)} of {len(feature_names)} features retained")
     return selected
+
+
+def _geographic_cv_folds(cities: np.ndarray, n_folds: int = 5):
+    """Yield (train_idx, val_idx) splitting by city groups."""
+    unique_cities = sorted(set(cities))
+    rng = np.random.default_rng(42)
+    shuffled = rng.permutation(unique_cities).tolist()
+    city_folds = [shuffled[i::n_folds] for i in range(n_folds)]
+    for fold_cities in city_folds:
+        val_mask = np.isin(cities, fold_cities)
+        yield np.where(~val_mask)[0], np.where(val_mask)[0]
+
+
+def search_hyperparameters(
+    X: np.ndarray,
+    y: np.ndarray,
+    cities: np.ndarray,
+    n_trials: int = 50,
+    random_state: int = 42,
+) -> tuple[dict, float, float]:
+    """Optuna search. Returns (best_params, mean_cv_n_estimators, best_cv_score)."""
+
+    def objective(trial):
+        params = {
+            "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+            "max_depth": trial.suggest_int("max_depth", 3, 10),
+            "min_child_samples": trial.suggest_int("min_child_samples", 20, 200),
+            "lambda_l1": trial.suggest_float("lambda_l1", 0.0, 5.0),
+            "lambda_l2": trial.suggest_float("lambda_l2", 0.0, 5.0),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.5, 1.0),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.5, 1.0),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+            "bagging_freq": 1,
+            "verbose": -1,
+            "random_state": random_state,
+        }
+        scores = []
+        n_estimators_list = []
+        for train_idx, val_idx in _geographic_cv_folds(cities, n_folds=5):
+            if len(val_idx) == 0 or len(train_idx) == 0:
+                continue
+            X_tr, X_val = X[train_idx], X[val_idx]
+            y_tr, y_val = y[train_idx], y[val_idx]
+            model = lgb.LGBMClassifier(n_estimators=500, **params)
+            model.fit(
+                X_tr, y_tr,
+                eval_set=[(X_val, y_val)],
+                callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(-1)],
+            )
+            n_estimators_list.append(model.best_iteration_ or model.n_estimators)
+            proba = model.predict_proba(X_val)[:, 1]
+            scores.append(roc_auc_score(y_val, proba))
+
+        trial.set_user_attr("mean_n_estimators", float(np.mean(n_estimators_list)))
+        return float(np.mean(scores))
+
+    study = optuna.create_study(direction="maximize",
+                                sampler=optuna.samplers.TPESampler(seed=random_state))
+    study.optimize(objective, n_trials=n_trials)
+
+    best_trial = study.best_trial
+    best_params = best_trial.params
+    mean_n_est = best_trial.user_attrs.get("mean_n_estimators", 100.0)
+    best_cv_score = float(best_trial.value)
+    print(f"Best CV ROC-AUC: {best_cv_score:.4f} | mean n_estimators: {mean_n_est:.0f}")
+    return best_params, mean_n_est, best_cv_score

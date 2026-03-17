@@ -55,3 +55,18 @@ def test_select_features_drops_noise_feature(synthetic_model_df):
     assert "pure_noise" not in selected
     # Real features should survive
     assert len(selected) >= 5
+
+
+def test_search_hyperparameters_returns_params_and_n_estimators(synthetic_model_df):
+    from src.train_model import search_hyperparameters, FEATURE_COLS, TARGET_COL
+    import numpy as np
+    X = synthetic_model_df[FEATURE_COLS].values
+    y = synthetic_model_df[TARGET_COL].values
+    cities = synthetic_model_df["city"].values
+    best_params, mean_n_est, best_cv_score = search_hyperparameters(
+        X, y, cities=cities, n_trials=2, random_state=42
+    )
+    assert "num_leaves" in best_params
+    assert "learning_rate" in best_params
+    assert mean_n_est > 0
+    assert 0.0 <= best_cv_score <= 1.0
