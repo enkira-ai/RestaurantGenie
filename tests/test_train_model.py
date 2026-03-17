@@ -29,3 +29,29 @@ def test_encode_cuisine_known_and_unknown(tmp_path):
     df = pd.DataFrame({"cuisine": ["italian", "mexican", "sushi", None]})
     result, label_map = encode_cuisine_column(df, params_path)
     assert result["cuisine_encoded"].tolist() == [1, 2, 0, 0]
+
+
+def test_select_features_drops_noise_feature(synthetic_model_df):
+    from src.train_model import select_features, FEATURE_COLS, TARGET_COL
+    import numpy as np
+    rng = np.random.default_rng(0)
+    # Build a dataset with genuine signal from several features
+    df = synthetic_model_df.copy()
+    # Target is a noisy combination of several real features so multiple survive
+    signal = (
+        df["restaurants_250m"] * 0.3
+        + df["bars_250m"] * 0.2
+        + df["median_income"] / 150000.0 * 0.3
+        + df["transit_stops_250m"] * 0.2
+    )
+    prob = 1 / (1 + np.exp(-(signal - signal.mean()) / signal.std()))
+    df[TARGET_COL] = (rng.random(len(df)) < prob).astype(int)
+    df["pure_noise"] = rng.random(len(df))
+    features = FEATURE_COLS + ["pure_noise"]
+    X = df[features].values
+    y = df[TARGET_COL].values
+    selected = select_features(X, y, feature_names=features)
+    # Noise column should not survive selection
+    assert "pure_noise" not in selected
+    # Real features should survive
+    assert len(selected) >= 5

@@ -61,3 +61,50 @@ def encode_cuisine_column(
         lambda c: label_map.get(c, 0)
     )
     return df, label_map
+
+
+def select_features(
+    X: np.ndarray,
+    y: np.ndarray,
+    feature_names: list[str],
+    n_folds: int = 5,
+    random_state: int = 42,
+) -> list[str]:
+    """5-fold CV feature selection using SHAP + permutation importance.
+    Returns list of surviving feature names.
+    """
+    kf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
+    shap_means = np.zeros(len(feature_names))
+    perm_means = np.zeros(len(feature_names))
+
+    for train_idx, val_idx in kf.split(X, y):
+        X_tr, X_val = X[train_idx], X[val_idx]
+        y_tr, y_val = y[train_idx], y[val_idx]
+        model = lgb.LGBMClassifier(n_estimators=100, random_state=random_state, verbose=-1)
+        model.fit(X_tr, y_tr)
+
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X_val)
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]  # binary: take positive class
+        elif hasattr(shap_values, 'shape') and shap_values.ndim == 3:
+            shap_values = shap_values[:, :, 1]  # (samples, features, classes) -> positive class
+        shap_means += np.abs(shap_values).mean(axis=0)
+
+        pi_result = permutation_importance(
+            model, X_val, y_val, n_repeats=5, random_state=random_state, scoring="roc_auc"
+        )
+        perm_means += pi_result.importances_mean
+
+    shap_means /= n_folds
+    perm_means /= n_folds
+
+    top_shap = shap_means.max()
+    threshold = 0.01 * top_shap
+
+    selected = [
+        name for i, name in enumerate(feature_names)
+        if shap_means[i] >= threshold and perm_means[i] >= 0
+    ]
+    print(f"Feature selection: {len(selected)} of {len(feature_names)} features retained")
+    return selected
