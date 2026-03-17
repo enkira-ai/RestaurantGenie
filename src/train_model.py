@@ -7,12 +7,36 @@ import pandas as pd
 import lightgbm as lgb
 import optuna
 import shap
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score, brier_score_loss
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+
+class _PlattWrapper:
+    """Platt-scaling wrapper for a pre-fitted classifier.
+
+    Replaces CalibratedClassifierCV(estimator, cv='prefit', method='sigmoid'),
+    which was removed in scikit-learn 1.8.
+    """
+
+    def __init__(self, estimator):
+        self.estimator = estimator
+        self._sigmoid = LogisticRegression()
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "_PlattWrapper":
+        raw = self.estimator.predict_proba(X)[:, 1].reshape(-1, 1)
+        self._sigmoid.fit(raw, y)
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        raw = self.estimator.predict_proba(X)[:, 1].reshape(-1, 1)
+        return self._sigmoid.predict_proba(raw)
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
 
 FEATURE_COLS = [
     "restaurants_250m", "restaurants_500m", "restaurants_1000m",
@@ -191,7 +215,7 @@ def fit_final_model(
     base_lgbm = lgb.LGBMClassifier(n_estimators=n_estimators, **params)
     base_lgbm.fit(X_train, y_train)
 
-    calibrated = CalibratedClassifierCV(base_lgbm, cv=None, method="sigmoid")
+    calibrated = _PlattWrapper(base_lgbm)
     calibrated.fit(X_cal, y_cal)
     return calibrated, base_lgbm
 
