@@ -219,6 +219,8 @@ Use `optuna` to search 50 trials over the following LightGBM parameters, evaluat
 
 After the best hyperparameters are identified, **refit the base LightGBM on all of `train_search_set`** using those hyperparameters and the selected features. This is `base_lgbm`. Refitting on all available train data (rather than keeping one CV fold's model) ensures the production model uses the full training signal.
 
+`n_estimators` for the refit is set to `round(mean_cv_n_estimators * 1.25)`, where `mean_cv_n_estimators` is the average number of trees selected by early stopping across the 5 hyperparameter-search CV folds for the winning trial. The 1.25 multiplier accounts for training on ~25% more data in the refit. Early stopping is **disabled** for the refit itself — `calibration_set` must not be used as a validation set here.
+
 ### Calibration
 
 ```python
