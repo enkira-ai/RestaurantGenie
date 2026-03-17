@@ -3,11 +3,13 @@ import os
 import time
 from pathlib import Path
 
+import censusgeocode as cg
 import numpy as np
 import pandas as pd
+import requests
 from tqdm import tqdm
 
-from src.features import fetch_pois_for_bbox, count_pois_by_type
+from src.features import fetch_pois_for_bbox, count_pois_by_type, CENSUS_ACS_URL, _CENSUS_VARS, CENSUS_API_KEY
 
 _CUISINE_MAP = {
     "pizza": "pizza", "italian": "italian", "mexican": "mexican",
@@ -103,3 +105,54 @@ def enrich_with_osm_features(df: pd.DataFrame) -> pd.DataFrame:
         time.sleep(2)  # rate-limit OSM Overpass
 
     return pd.DataFrame(rows_with_features)
+
+
+def enrich_with_census(df: pd.DataFrame) -> pd.DataFrame:
+    """Add median_income, total_population, median_age via Census ACS.
+    Caches ACS lookup by FIPS (state+county+tract) to minimise API calls.
+    Uses module-level `requests` so tests can patch `src.build_dataset.requests.get`.
+    """
+    geocoder = cg.CensusGeocode()
+    fips_cache: dict[tuple, dict] = {}  # (state, county, tract) → demographics
+
+    def _lookup_fips(state, county, tract):
+        key = (state, county, tract)
+        if key in fips_cache:
+            return fips_cache[key]
+        params = {
+            "get": _CENSUS_VARS,
+            "for": f"tract:{tract}",
+            "in": f"state:{state}+county:{county}",
+        }
+        if CENSUS_API_KEY:
+            params["key"] = CENSUS_API_KEY
+        try:
+            resp = requests.get(CENSUS_ACS_URL, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            header, values = data[0], data[1]
+            row = dict(zip(header, values))
+            result = {
+                "median_income": float(row["B19013_001E"]) if row["B19013_001E"] else None,
+                "total_population": float(row["B01003_001E"]) if row["B01003_001E"] else None,
+                "median_age": float(row["B01002_001E"]) if row["B01002_001E"] else None,
+            }
+        except Exception:
+            result = {"median_income": None, "total_population": None, "median_age": None}
+        fips_cache[key] = result
+        return result
+
+    rows = []
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Census enrichment"):
+        demo = {"median_income": None, "total_population": None, "median_age": None}
+        try:
+            geocode_result = geocoder.coordinates(x=row["lon"], y=row["lat"])
+            tracts = geocode_result[0]["geographies"].get("Census Tracts", [])
+            if tracts:
+                t = tracts[0]
+                demo = _lookup_fips(t["STATE"], t["COUNTY"], t["TRACT"])
+        except Exception:
+            pass
+        rows.append({**row.to_dict(), **demo})
+
+    return pd.DataFrame(rows)
