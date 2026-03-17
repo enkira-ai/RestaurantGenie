@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from src.features import fetch_pois_for_bbox, count_pois_by_type
+
 _CUISINE_MAP = {
     "pizza": "pizza", "italian": "italian", "mexican": "mexican",
     "chinese": "chinese", "japanese": "japanese", "sushi": "japanese",
@@ -73,3 +75,31 @@ def load_yelp_businesses(jsonl_path: str | Path) -> pd.DataFrame:
                 "is_open": biz.get("is_open"),
             })
     return pd.DataFrame(records)
+
+
+_OSM_PADDING_DEG = 0.014  # ~1.5km padding around city bounding box
+
+
+def enrich_with_osm_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Batch OSM POI enrichment: one Overpass query per city."""
+    rows_with_features = []
+    for city, group in tqdm(df.groupby("city"), desc="OSM enrichment by city"):
+        south = group["lat"].min() - _OSM_PADDING_DEG
+        north = group["lat"].max() + _OSM_PADDING_DEG
+        west = group["lon"].min() - _OSM_PADDING_DEG
+        east = group["lon"].max() + _OSM_PADDING_DEG
+        try:
+            pois = fetch_pois_for_bbox(south, west, north, east)
+        except Exception as e:
+            print(f"OSM query failed for {city}: {e}. Filling zeros.")
+            pois = []
+
+        for _, row in group.iterrows():
+            counts = count_pois_by_type(
+                row["lat"], row["lon"], pois, target_cuisine=row.get("cuisine")
+            )
+            rows_with_features.append({**row.to_dict(), **counts})
+
+        time.sleep(2)  # rate-limit OSM Overpass
+
+    return pd.DataFrame(rows_with_features)
