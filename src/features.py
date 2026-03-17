@@ -50,6 +50,8 @@ def fetch_census_demographics(lat: float, lon: float) -> dict:
         }
     except Exception:
         return null_result
+
+
 EARTH_RADIUS_M = 6_371_000
 RADII_M = [250, 500, 1000]
 

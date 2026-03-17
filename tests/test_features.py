@@ -57,7 +57,6 @@ def test_count_pois_by_type_empty_returns_zeros():
 def test_fetch_census_demographics_returns_expected_fields(mocker):
     from src.features import fetch_census_demographics
     from tests.conftest import FAKE_CENSUS_ACS_RESPONSE
-    from unittest.mock import MagicMock
     mocker.patch(
         "censusgeocode.CensusGeocode.coordinates",
         return_value=[{
