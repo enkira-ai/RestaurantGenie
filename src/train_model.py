@@ -14,6 +14,24 @@ from sklearn.metrics import roc_auc_score, brier_score_loss
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+# 2022 ACS 5-year median household income by state (2-letter USPS codes)
+_STATE_ABBREV_TO_MEDIAN: dict[str, int] = {
+    "AL": 54_943, "AK": 77_640, "AZ": 65_913, "AR": 52_528,
+    "CA": 84_097, "CO": 82_254, "CT": 83_771, "DE": 76_048,
+    "DC": 101_027, "FL": 63_062, "GA": 65_030,
+    "HI": 88_005, "ID": 67_473, "IL": 72_205, "IN": 62_743,
+    "IA": 66_054, "KS": 65_700, "KY": 57_834, "LA": 54_216,
+    "ME": 68_251, "MD": 94_384, "MA": 89_645, "MI": 65_459,
+    "MN": 80_441, "MS": 48_610, "MO": 61_847, "MT": 63_249,
+    "NE": 68_116, "NV": 67_510, "NH": 90_845, "NJ": 96_346,
+    "NM": 54_020, "NY": 75_157, "NC": 62_891, "ND": 70_651,
+    "OH": 62_689, "OK": 57_057, "OR": 72_258, "PA": 67_587,
+    "RI": 74_489, "SC": 60_965, "SD": 65_030, "TN": 60_560,
+    "TX": 67_321, "UT": 82_646, "VT": 72_431, "VA": 82_450,
+    "WA": 87_648, "WV": 51_615, "WI": 69_943, "WY": 68_002,
+}
+_US_MEDIAN_INCOME_FALLBACK = 74_580
+
 
 class _PlattWrapper:
     """Platt-scaling wrapper for a pre-fitted classifier.
@@ -72,6 +90,12 @@ FEATURE_COLS = [
     # need wealthier neighbourhoods — a signal diluted in full-population selection
     # because $$/$$$$ restaurants are rare (<4% of dataset)
     "median_income_x_price",
+    # State-relative income features: same absolute income means different things
+    # in Mississippi vs California; these capture purchasing power relative to
+    # what locals consider normal
+    "income_relative_to_state",   # continuous ratio: tract median / state median
+    "income_level_state_cat",     # 0=low (<75%), 1=avg (75-125%), 2=high (>125%)
+    "state_encoded",              # label-encoded 2-letter state code
 ]
 TARGET_COL = "is_successful"
 
@@ -255,6 +279,7 @@ def save_artifacts(
     params_path: str | Path,
     model_dir: str | Path,
     price_tier_rates: dict | None = None,
+    state_label_map: dict | None = None,
 ) -> None:
     """Save model.pkl, shap_explainer.pkl, updated normalization_params.json."""
     model_dir = Path(model_dir)
@@ -275,6 +300,8 @@ def save_artifacts(
     params["best_hyperparameters"] = best_params
     if price_tier_rates is not None:
         params["price_tier_rates"] = price_tier_rates
+    if state_label_map is not None:
+        params["state_label_map"] = state_label_map
     with open(params_path, "w") as f:
         json.dump(params, f, indent=2)
     print(f"Saved model artifacts to {model_dir}/")
@@ -305,6 +332,22 @@ def train_model(
     print("Loading dataset...")
     df = pd.read_parquet(parquet_path)
     df, label_map = encode_cuisine_column(df, params_path)
+
+    # --- State-relative income features ---
+    df["_state_median"] = df["state"].map(_STATE_ABBREV_TO_MEDIAN).fillna(_US_MEDIAN_INCOME_FALLBACK)
+    valid_inc = df["median_income"].where(df["median_income"] > 0)
+    df["income_relative_to_state"] = (valid_inc / df["_state_median"]).clip(0.1, 5.0)
+    # 0=low (<75% of state median), 1=avg (75-125%), 2=high (>125%)
+    df["income_level_state_cat"] = pd.cut(
+        df["income_relative_to_state"].fillna(1.0),
+        bins=[0.0, 0.75, 1.25, 6.0],
+        labels=[0, 1, 2],
+    ).astype("float64")
+    # State encoding — US states only; non-US / unknown → -1
+    us_states = sorted(s for s in df["state"].dropna().unique() if s in _STATE_ABBREV_TO_MEDIAN)
+    state_label_map = {s: i for i, s in enumerate(us_states)}
+    df["state_encoded"] = df["state"].map(state_label_map).fillna(-1).astype("float64")
+    df.drop(columns=["_state_median"], inplace=True)
 
     # Ensure all feature columns exist
     for col in FEATURE_COLS:
@@ -370,6 +413,7 @@ def train_model(
         params_path=params_path,
         model_dir=models_dir,
         price_tier_rates=price_tier_rates,
+        state_label_map=state_label_map,
     )
 
     # Score all rows and write predicted_probability back to full parquet

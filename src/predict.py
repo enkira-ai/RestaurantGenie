@@ -41,6 +41,7 @@ def assemble_feature_vector(
     price_level: int,
     params_path: str | Path,
     city: str | None = None,
+    state: str | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Generate full feature vector ordered by selected_features from params.
     All features come from free sources: OSM Overpass and US Census ACS.
@@ -97,6 +98,17 @@ def assemble_feature_vector(
     neighborhood["median_income_x_price"] = (
         (neighborhood.get("median_income") or 0) / 100000.0 * price_level
     )
+
+    # State-relative income features
+    state_abbrev = _STATE_NAME_TO_ABBREV.get(state, "") if state else ""
+    state_median = _STATE_ABBREV_TO_MEDIAN.get(state_abbrev, _US_MEDIAN_INCOME)
+    inc = neighborhood.get("median_income") or 0
+    ratio = (inc / state_median) if (inc > 0 and state_median > 0) else 1.0
+    ratio = max(0.1, min(5.0, ratio))
+    neighborhood["income_relative_to_state"] = ratio
+    neighborhood["income_level_state_cat"] = float(0 if ratio < 0.75 else (1 if ratio < 1.25 else 2))
+    state_label_map: dict = params.get("state_label_map", {})
+    neighborhood["state_encoded"] = float(state_label_map.get(state_abbrev, -1))
 
     # Price tier success rate — lookup table stored at train time, free at inference
     price_tier_rates = params.get("price_tier_rates", {})
@@ -211,6 +223,10 @@ _FEATURE_LABELS = {
     "cuisine_gap": "unmet demand for this cuisine",
     "cluster_score": "restaurant cluster density",
     "distance_city_center": "distance from city centre",
+    # State-relative income
+    "income_relative_to_state": "neighbourhood income relative to state median",
+    "income_level_state_cat": "income tier vs state (low / avg / high)",
+    "state_encoded": "state",
 }
 
 
@@ -247,6 +263,9 @@ _FEATURE_SUMMARIES = {
     "price_tier_success_rate":   ("this price tier performs well in this city", "this price tier has a poor track record in this city"),
     "cuisine_gap":               ("underserved demand for this cuisine", "plenty of this cuisine already available"),
     "cluster_score":             ("strong restaurant cluster — destination dining area", "sparse restaurant area"),
+    "income_relative_to_state":  ("neighbourhood income above state average", "neighbourhood income below state average"),
+    "income_level_state_cat":    ("affluent area by state standards", "lower-income area by state standards"),
+    "state_encoded":             ("state-level dining market is favourable", "state-level dining market is challenging"),
 }
 
 
@@ -342,6 +361,41 @@ def find_comparable_restaurants(
 
 
 _PRICE_SYMBOLS = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
+
+# Full state name (as returned by Nominatim) → 2-letter USPS abbreviation
+_STATE_NAME_TO_ABBREV: dict[str, str] = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+    "District of Columbia": "DC", "Florida": "FL", "Georgia": "GA",
+    "Hawaii": "HI", "Idaho": "ID", "Illinois": "IL", "Indiana": "IN",
+    "Iowa": "IA", "Kansas": "KS", "Kentucky": "KY", "Louisiana": "LA",
+    "Maine": "ME", "Maryland": "MD", "Massachusetts": "MA", "Michigan": "MI",
+    "Minnesota": "MN", "Mississippi": "MS", "Missouri": "MO", "Montana": "MT",
+    "Nebraska": "NE", "Nevada": "NV", "New Hampshire": "NH", "New Jersey": "NJ",
+    "New Mexico": "NM", "New York": "NY", "North Carolina": "NC", "North Dakota": "ND",
+    "Ohio": "OH", "Oklahoma": "OK", "Oregon": "OR", "Pennsylvania": "PA",
+    "Rhode Island": "RI", "South Carolina": "SC", "South Dakota": "SD",
+    "Tennessee": "TN", "Texas": "TX", "Utah": "UT", "Vermont": "VT",
+    "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+    "Wisconsin": "WI", "Wyoming": "WY",
+}
+
+# 2-letter → median income (mirrors train_model._STATE_ABBREV_TO_MEDIAN)
+_STATE_ABBREV_TO_MEDIAN: dict[str, int] = {
+    "AL": 54_943, "AK": 77_640, "AZ": 65_913, "AR": 52_528,
+    "CA": 84_097, "CO": 82_254, "CT": 83_771, "DE": 76_048,
+    "DC": 101_027, "FL": 63_062, "GA": 65_030,
+    "HI": 88_005, "ID": 67_473, "IL": 72_205, "IN": 62_743,
+    "IA": 66_054, "KS": 65_700, "KY": 57_834, "LA": 54_216,
+    "ME": 68_251, "MD": 94_384, "MA": 89_645, "MI": 65_459,
+    "MN": 80_441, "MS": 48_610, "MO": 61_847, "MT": 63_249,
+    "NE": 68_116, "NV": 67_510, "NH": 90_845, "NJ": 96_346,
+    "NM": 54_020, "NY": 75_157, "NC": 62_891, "ND": 70_651,
+    "OH": 62_689, "OK": 57_057, "OR": 72_258, "PA": 67_587,
+    "RI": 74_489, "SC": 60_965, "SD": 65_030, "TN": 60_560,
+    "TX": 67_321, "UT": 82_646, "VT": 72_431, "VA": 82_450,
+    "WA": 87_648, "WV": 51_615, "WI": 69_943, "WY": 68_002,
+}
 
 # State median household incomes — 2022 ACS 5-year estimates
 # Keys are full state names as returned by Nominatim
@@ -479,6 +533,17 @@ def _format_feature_value(feature: str, value, state: str | None = None) -> str 
         level = "high" if v > 1200 else ("moderate" if v > 500 else "low")
         return f"{v:.0f}  ({level})"
 
+    if feature == "income_relative_to_state":
+        pct = round((v - 1.0) * 100)
+        direction = f"+{pct}%" if pct >= 0 else f"{pct}%"
+        level = "above" if v >= 1.25 else ("below" if v <= 0.75 else "near")
+        ref_label = f"{state} median" if state and state in _STATE_MEDIAN_INCOME else "state median"
+        return f"{direction} {ref_label}  ({level} average)"
+
+    if feature == "income_level_state_cat":
+        labels = {0.0: "low (bottom third vs state)", 1.0: "average vs state", 2.0: "high (top third vs state)"}
+        return labels.get(v)
+
     return None
 
 
@@ -606,7 +671,7 @@ def run_prediction(
         city = _infer_city(lat, lon, reference_df)
 
     feature_vector, feature_names = assemble_feature_vector(
-        lat, lon, cuisine, price_level, params_path, city=city
+        lat, lon, cuisine, price_level, params_path, city=city, state=state
     )
 
     probability = float(model.predict_proba([feature_vector])[0, 1])

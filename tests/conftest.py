@@ -76,6 +76,7 @@ def synthetic_model_df():
     n = 200
     df = pd.DataFrame({
         "city": ["CityA"] * 100 + ["CityB"] * 100,
+        "state": ["PA"] * 100 + ["TX"] * 100,
         "cuisine": rng.choice(["italian", "mexican", "chinese"], n).tolist(),
         "price_level": rng.integers(1, 5, n).tolist(),
         "restaurants_250m": rng.integers(0, 20, n).tolist(),
@@ -130,6 +131,19 @@ def synthetic_model_df():
     df["price_tier_success_rate"] = 0.5
     df["price_tier_count_log"] = np.log1p(20)
     df["median_income_x_price"] = df["median_income"] / 100000.0 * df["price_level"]
+
+    # State-relative income features (mirrors train_model computation)
+    _fixture_state_medians = {"PA": 67_587, "TX": 67_321}
+    _us_fallback = 74_580
+    df["_state_median"] = df["state"].map(_fixture_state_medians).fillna(_us_fallback)
+    df["income_relative_to_state"] = (df["median_income"] / df["_state_median"]).clip(0.1, 5.0)
+    df["income_level_state_cat"] = pd.cut(
+        df["income_relative_to_state"].fillna(1.0),
+        bins=[0.0, 0.75, 1.25, 6.0], labels=[0, 1, 2],
+    ).astype("float64")
+    _fixture_state_map = {"PA": 0, "TX": 1}
+    df["state_encoded"] = df["state"].map(_fixture_state_map).fillna(-1).astype("float64")
+    df.drop(columns=["_state_median"], inplace=True)
 
     # Yelp spatial features
     df["avg_price_1km"] = rng.uniform(1, 4, 200)
