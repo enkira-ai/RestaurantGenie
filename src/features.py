@@ -2,11 +2,11 @@ import os
 import time
 import requests
 import numpy as np
-import censusgeocode as cg
 from sklearn.neighbors import BallTree
 
 CENSUS_API_KEY = os.environ.get("CENSUS_API_KEY", "")
 CENSUS_ACS_URL = "https://api.census.gov/data/2022/acs/acs5"
+_CENSUS_GEOCODER_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates"
 _CENSUS_VARS = "B19013_001E,B01003_001E,B01002_001E"
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -15,11 +15,22 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 def fetch_census_demographics(lat: float, lon: float) -> dict:
     """Return median_income, total_population, median_age for the census tract
     containing (lat, lon). Returns None values if lookup fails.
+    Uses the Census REST geocoder directly (censusgeocode library is unreliable).
     """
     null_result = {"median_income": None, "total_population": None, "median_age": None}
     try:
-        geocode_result = cg.CensusGeocode().coordinates(x=lon, y=lat)
-        tracts = geocode_result[0]["geographies"].get("Census Tracts", [])
+        resp = requests.get(
+            _CENSUS_GEOCODER_URL,
+            params={
+                "x": lon, "y": lat,
+                "benchmark": "Public_AR_Current",
+                "vintage": "Current_Current",
+                "format": "json",
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        tracts = resp.json().get("result", {}).get("geographies", {}).get("Census Tracts", [])
         if not tracts:
             return null_result
         tract_info = tracts[0]

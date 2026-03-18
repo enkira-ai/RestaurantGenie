@@ -57,18 +57,24 @@ def test_count_pois_by_type_empty_returns_zeros():
 def test_fetch_census_demographics_returns_expected_fields(mocker):
     from src.features import fetch_census_demographics
     from tests.conftest import FAKE_CENSUS_ACS_RESPONSE
-    mocker.patch(
-        "censusgeocode.CensusGeocode.coordinates",
-        return_value=[{
+
+    FAKE_GEOCODER_RESPONSE = {
+        "result": {
             "geographies": {
                 "Census Tracts": [{"TRACT": "001000", "COUNTY": "003", "STATE": "32"}]
             }
-        }],
-    )
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = FAKE_CENSUS_ACS_RESPONSE
-    mock_resp.raise_for_status.return_value = None
-    mocker.patch("src.features.requests.get", return_value=mock_resp)
+        }
+    }
+
+    geocoder_resp = MagicMock()
+    geocoder_resp.json.return_value = FAKE_GEOCODER_RESPONSE
+    geocoder_resp.raise_for_status.return_value = None
+
+    acs_resp = MagicMock()
+    acs_resp.json.return_value = FAKE_CENSUS_ACS_RESPONSE
+    acs_resp.raise_for_status.return_value = None
+
+    mocker.patch("src.features.requests.get", side_effect=[geocoder_resp, acs_resp])
     result = fetch_census_demographics(36.17, -115.14)
     assert result["median_income"] == 75000.0
     assert result["total_population"] == 50000.0
@@ -77,10 +83,12 @@ def test_fetch_census_demographics_returns_expected_fields(mocker):
 
 def test_fetch_census_demographics_handles_missing_tract(mocker):
     from src.features import fetch_census_demographics
-    mocker.patch(
-        "censusgeocode.CensusGeocode.coordinates",
-        return_value=[{"geographies": {"Census Tracts": []}}],
-    )
+
+    empty_resp = MagicMock()
+    empty_resp.json.return_value = {"result": {"geographies": {"Census Tracts": []}}}
+    empty_resp.raise_for_status.return_value = None
+    mocker.patch("src.features.requests.get", return_value=empty_resp)
+
     result = fetch_census_demographics(0.0, 0.0)
     assert result["median_income"] is None
     assert result["total_population"] is None

@@ -126,9 +126,10 @@ def synthetic_model_df():
 
     df["business_id"] = [f"biz_{i}" for i in range(200)]
 
-    # Price tier features
+    # Price tier and income×price features
     df["price_tier_success_rate"] = 0.5
     df["price_tier_count_log"] = np.log1p(20)
+    df["median_income_x_price"] = df["median_income"] / 100000.0 * df["price_level"]
 
     # Yelp spatial features
     df["avg_price_1km"] = rng.uniform(1, 4, 200)

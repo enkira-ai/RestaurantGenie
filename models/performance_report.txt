@@ -1,7 +1,7 @@
-Feature selection: 15 of 46 features retained
-Selected features: ['restaurants_250m', 'restaurants_500m', 'restaurants_same_cuisine_250m', 'restaurants_same_cuisine_500m', 'bars_500m', 'offices_250m', 'offices_500m', 'offices_1000m', 'transit_stops_250m', 'transit_stops_1000m', 'schools_1000m', 'cuisine_encoded', 'price_level', 'poi_diversity_500m', 'price_tier_success_rate']
-Best hyperparameters: {'num_leaves': 113, 'max_depth': 7, 'min_child_samples': 147, 'lambda_l1': 2.1637280559024568, 'lambda_l2': 3.6047930570941387, 'feature_fraction': 0.9134336554829187, 'bagging_fraction': 0.7153888601903944, 'learning_rate': 0.03976090046490729}
-n_estimators (refit): 162
-Geographic CV ROC-AUC (train_search_set, 5-fold): 0.6799
-Test-city ROC-AUC (held-out, uncalibrated): 0.6820
-Test-city Brier score (calibrated): 0.1353
+Feature selection: 16 of 47 features retained
+Selected features: ['restaurants_250m', 'bars_500m', 'offices_1000m', 'schools_1000m', 'median_income', 'total_population', 'median_age', 'cuisine_encoded', 'price_level', 'foot_traffic_proxy_500m', 'income_office_interaction', 'income_per_capita_proxy', 'poi_diversity_500m', 'total_population_500m_avg', 'price_tier_success_rate', 'median_income_x_price']
+Best hyperparameters: {'num_leaves': 126, 'max_depth': 5, 'min_child_samples': 133, 'lambda_l1': 2.580143193422604, 'lambda_l2': 4.190453012757512, 'feature_fraction': 0.7481659541088518, 'bagging_fraction': 0.5721469484412613, 'learning_rate': 0.10723677912470687}
+n_estimators (refit): 56
+Geographic CV ROC-AUC (train_search_set, 5-fold): 0.6846
+Test-city ROC-AUC (held-out, uncalibrated): 0.6830
+Test-city Brier score (calibrated): 0.1351

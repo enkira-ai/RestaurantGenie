@@ -87,6 +87,9 @@ def assemble_feature_vector(
     r500m = neighborhood.get("restaurants_500m") or 0
     neighborhood["cuisine_gap"] = pop / (same_c_1km + 1)
     neighborhood["cluster_score"] = r500m / pop * 1000
+    neighborhood["median_income_x_price"] = (
+        (neighborhood.get("median_income") or 0) / 100000.0 * price_level
+    )
 
     # Price tier success rate — lookup table stored at train time, free at inference
     price_tier_rates = params.get("price_tier_rates", {})

@@ -68,6 +68,10 @@ FEATURE_COLS = [
     # Price tier success rate — stored in normalization_params at train time,
     # looked up at inference via (city, price_level); falls back to global average
     "price_tier_success_rate",
+    # Explicit income × price interaction: captures that expensive restaurants
+    # need wealthier neighbourhoods — a signal diluted in full-population selection
+    # because $$/$$$$ restaurants are rare (<4% of dataset)
+    "median_income_x_price",
 ]
 TARGET_COL = "is_successful"
 
