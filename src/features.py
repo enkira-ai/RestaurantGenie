@@ -220,6 +220,14 @@ out center tags;
                 and any(cuisine == tok.strip() for tok in r["cuisine"].lower().split(";"))
             ]
             if same:
+                # Sort: pure cuisine match first (fewer tokens), then by distance
+                for r in same:
+                    tokens = [t.strip() for t in r["cuisine"].lower().split(";")]
+                    r["cuisine_specificity"] = len(tokens)
+                    r["cuisine"] = cuisine  # display matched token, not raw tag
+                same.sort(key=lambda r: (r["cuisine_specificity"], r["distance_km"]))
+                for r in same:
+                    r.pop("cuisine_specificity", None)
                 return same[:top_n]
             # No same-cuisine at this radius — try expanding before giving up
             continue
