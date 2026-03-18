@@ -1,77 +1,249 @@
 # RestaurantGenie
 
-Predicts whether a US address is a good location for a new restaurant.
+Predicts whether a US address is a good location for a new restaurant, given cuisine type and price level. Returns a success probability, verdict, key drivers (via SHAP), and a list of comparable nearby restaurants.
 
-## Setup
+---
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Installation
 
-2. Download the [Yelp Open Dataset](https://www.yelp.com/dataset) (free, requires registration).
-   Place `yelp_academic_dataset_business.json` in `data/raw/`.
-
-3. (Optional) Get a free Census API key at https://api.census.gov/data/key_signup.html.
-   Set it as an environment variable:
-   ```bash
-   export CENSUS_API_KEY=your_key_here
-   ```
-
-## Stage 1: Build Dataset (~30–60 min)
+Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
-python src/build_dataset.py
+git clone https://github.com/enkira-ai/RestaurantGenie.git
+cd RestaurantGenie
+uv sync
 ```
 
-Produces `data/processed/restaurant_features.parquet` (~150k rows) and
-`models/normalization_params.json`.
+### Optional: Census API key
 
-## Stage 2: Train Model (~5–15 min)
+Demographic lookups work without a key but are rate-limited. For faster dataset building, get a free key at https://api.census.gov/data/key_signup.html and export it:
 
 ```bash
-python src/train_model.py
+export CENSUS_API_KEY=your_key_here
 ```
 
-Produces `models/model.pkl`, `models/shap_explainer.pkl`, and
-`models/performance_report.txt` (ROC-AUC, Brier score).
+---
 
-## Stage 3: Predict
+## Quick start (model already trained)
+
+The trained model is included in `models/`. Skip to [Predicting](#predicting) if you just want to run predictions.
+
+---
+
+## Building the dataset from scratch
+
+### 1. Download the Yelp Open Dataset
+
+Register at https://www.yelp.com/dataset (free) and download the academic dataset. Place these two files in `data/raw/`:
+
+- `yelp_academic_dataset_business.json`
+- `yelp_academic_dataset_review.json`
+
+### 2. Extract review statistics
 
 ```bash
-python src/predict.py \
-  --address "123 Main St, Austin TX" \
-  --cuisine italian \
+uv run python -m src.review_stats
+```
+
+Streams the 6.9M-review file to compute per-business review velocity and recency.
+Output: `data/processed/review_stats.parquet`
+
+### 3. Build the feature dataset
+
+```bash
+uv run python -m src.build_dataset
+```
+
+For each restaurant this:
+- Queries OSM Overpass for nearby POIs (restaurants, bars, offices, hotels, transit, schools) at 250m / 500m / 1km radii
+- Looks up US Census ACS demographics (median income, population, median age) for the census tract
+- Computes derived features (saturation ratios, foot traffic proxy, demand density, POI diversity)
+- Computes the success label (see [Success criteria](#success-criteria))
+
+Output: `data/processed/restaurant_features.parquet` (~52k restaurants, ~80 columns)
+Runtime: 30–60 minutes (OSM queries are the bottleneck)
+
+### 4. Backfill Census demographics
+
+```bash
+uv run python scripts/backfill_census.py
+```
+
+Geocodes all restaurants to census tracts and fills in income / population / age. Groups by ~2km cells so only ~3,300 geocoder calls are needed for 52k restaurants.
+Runtime: ~15 minutes
+
+### 5. Train the model
+
+```bash
+uv run python -m src.train_model
+```
+
+Output: `models/model.pkl`, `models/shap_explainer.pkl`, `models/normalization_params.json`, `models/performance_report.txt`
+Runtime: 5–15 minutes
+
+---
+
+## Predicting
+
+### Shell script (recommended)
+
+```bash
+./predict.sh "<address>" <cuisine> <price>
+```
+
+**Arguments**
+
+| Argument | Description |
+|---|---|
+| `address` | Full US address in quotes, e.g. `"1600 N Broad St, Philadelphia PA"` |
+| `cuisine` | One of: `american`, `burgers`, `chinese`, `french`, `greek`, `indian`, `italian`, `japanese`, `korean`, `mediterranean`, `mexican`, `other`, `pizza`, `sandwiches`, `seafood`, `steakhouses`, `thai`, `vietnamese` |
+| `price` | `1` = $ (budget) · `2` = $$ (mid-range) · `3` = $$$ (upscale) · `4` = $$$$ (fine dining) |
+
+**Examples**
+
+```bash
+./predict.sh "1600 N Broad St, Philadelphia PA" american 2
+./predict.sh "900 N Michigan Ave, Chicago IL" italian 3
+./predict.sh "742 Evergreen Terrace, Springfield IL" pizza 1
+```
+
+### Python module
+
+```bash
+uv run python -W ignore -m src.predict \
+  --address "1600 N Broad St, Philadelphia PA" \
+  --cuisine american \
   --price 2
 ```
 
-Optional flags: `--models-dir` (default: `models`), `--parquet` (default: `data/processed/restaurant_features.parquet`), `--params` (default: `models/normalization_params.json`).
+Optional flags: `--models-dir` (default: `models`), `--parquet` (default: `data/processed/restaurant_features.parquet`), `--params` (default: `models/normalization_params.json`)
 
 ### Example output
 
 ```
 RestaurantGenie -- Location Analysis
 --------------------------------------
-Address:   123 Main St, Austin TX
-Cuisine:   Italian
+Address:   1600 N Broad St, Philadelphia PA 19121
+Cuisine:   American
 Price:     $$
 
-Success probability:  0.71  (top 29% of comparable restaurants)
-Verdict:              LIKELY GOOD LOCATION ✓
+Success probability:  0.44  (better than 99% of comparable restaurants)
+Verdict:              LIKELY GOOD LOCATION
 
 PROS
-  + neighborhood median income
-  + office density (500m)
+  + price_tier_success_rate
+  + restaurants_250m
+  + schools_1000m
 
 CONS
   - restaurant density (500m)
+  - cuisine type fit
+  - transit_stops_250m
 
 Comparable restaurants nearby:
-  Olive & Vine                   (italian, $$)  4.2★  2.1km
+  Brocks Wings & Things          (american, $$)  2.0  0.0km
+  Masters Bar & Restaurant       (american, $$)  3.5  0.1km
+  honeygrow                      (american, $)   3.5  0.1km
+  Draught Horse Pub & Grill      (american, $$)  3.0  0.2km
+  Pub Webb                       (american, $)   4.0  0.3km
 ```
 
-## Run Tests
+**Interpreting the output**
+
+- **Success probability** — model's estimated probability this location outperforms comparable restaurants. Higher is better.
+- **Better than X%** — how this location ranks against restaurants of the same cuisine and price tier in the reference dataset.
+- **Verdict** — LIKELY GOOD if the location scores in the top 35% of comparable restaurants.
+- **PROS / CONS** — top SHAP drivers pushing the prediction up or down.
+- **Comparable restaurants** — real restaurants of the same cuisine within ±1 price tier and 5km, from the Yelp training set.
+
+---
+
+## Success criteria
+
+The model predicts a **proxy success score** since restaurant revenue is not publicly available. A restaurant is labelled successful if it ranks in the **top 25% of its peer group** on a composite score:
+
+```
+success_score = 0.50 × z_rating + 0.35 × z_velocity + 0.15 × z_activity
+```
+
+Where, within each (city, cuisine, price tier) peer group:
+
+| Component | Definition |
+|---|---|
+| `z_rating` | Z-score of Bayesian-smoothed rating (smoothed toward peer mean, m=25 reviews) |
+| `z_velocity` | Z-score of review velocity = total reviews ÷ restaurant age in years |
+| `z_activity` | Z-score of reviews received in the last 12 months |
+
+**Filters applied before labelling:**
+- Minimum 15 reviews (restaurants with fewer are excluded from training)
+- Peer group must have ≥ 10 members; falls back to (city, cuisine) if smaller
+
+---
+
+## Model details
+
+**Algorithm:** LightGBM binary classifier with Platt calibration
+**Training data:** ~52k US restaurants from the [Yelp Open Dataset](https://www.yelp.com/dataset) across 920 cities
+**Positive rate:** ~18.8% (top 25% within peer group, after 15-review minimum filter)
+**Validation:** Geographic cross-validation — entire cities held out, never split by row
+
+| Metric | Value |
+|---|---|
+| Geographic CV ROC-AUC (5-fold) | 0.685 |
+| Held-out city ROC-AUC | 0.683 |
+| Calibrated Brier score | 0.135 |
+
+### Surviving features (16 of 47 candidates)
+
+All features are derivable for free at inference time from OSM Overpass + US Census ACS + a lookup table stored in `models/normalization_params.json`. No paid API is required.
+
+| Feature | Source | What it captures |
+|---|---|---|
+| `restaurants_250m` | OSM | Immediate competition density |
+| `bars_500m` | OSM | Nightlife / foot traffic nearby |
+| `offices_1000m` | OSM | Daytime lunch demand |
+| `schools_1000m` | OSM | Family / community demand |
+| `median_income` | Census ACS | Neighbourhood wealth |
+| `total_population` | Census ACS | Catchment size |
+| `median_age` | Census ACS | Demographic profile |
+| `cuisine_encoded` | Input | Cuisine type fit |
+| `price_level` | Input | Price tier |
+| `foot_traffic_proxy_500m` | OSM derived | Offices + transit + hotels weighted |
+| `income_office_interaction` | Census × OSM | Wealthy daytime workers nearby |
+| `income_per_capita_proxy` | Census derived | Income normalised for city size |
+| `poi_diversity_500m` | OSM derived | Neighbourhood activity variety |
+| `total_population_500m_avg` | Census derived | Local density |
+| `price_tier_success_rate` | Training lookup | Historical success rate for this price tier in this city |
+| `median_income_x_price` | Census × Input | Income × price level interaction (expensive restaurants need wealthier areas) |
+
+### Hyperparameters
+
+Found by Optuna (50 trials, geographic CV objective):
+
+```
+num_leaves: 126      max_depth: 5        min_child_samples: 133
+lambda_l1: 2.58      lambda_l2: 4.19     feature_fraction: 0.748
+bagging_fraction: 0.572                  learning_rate: 0.107
+n_estimators: 56
+```
+
+---
+
+## Running tests
 
 ```bash
-pytest tests/ -v
+uv run pytest tests/ -v
 ```
+
+33 tests covering feature engineering, success label computation, model pipeline, and prediction.
+
+---
+
+## Data sources
+
+| Source | Used for | Cost |
+|---|---|---|
+| [Yelp Open Dataset](https://www.yelp.com/dataset) | Training labels (ratings, review counts, business metadata) | Free (registration required) |
+| [OSM Overpass API](https://overpass-api.de) | POI counts at inference time | Free |
+| [US Census ACS](https://www.census.gov/data/developers/data-sets/acs-5year.html) | Demographics at inference time | Free |
+| [Census Geocoder](https://geocoding.geo.census.gov) | Coordinate → census tract lookup | Free |
