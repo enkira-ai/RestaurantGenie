@@ -220,9 +220,11 @@ out center tags;
                 and any(cuisine == tok.strip() for tok in r["cuisine"].lower().split(";"))
             ]
             if same:
-                return same[:top_n]  # always prefer same-cuisine, even if only 1 or 2 found
+                return same[:top_n]
+            # No same-cuisine at this radius — try expanding before giving up
+            continue
 
-        # No same-cuisine found — return nearest restaurants of any type as context
+        # No cuisine filter requested — return nearest restaurants
         if rows:
             return rows[:top_n]
 
