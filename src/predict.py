@@ -214,7 +214,7 @@ _FEATURE_LABELS = {
     "median_age_500m_avg": "average age within 500m",
     "income_office_interaction": "wealthy daytime workers nearby",
     "income_per_capita_proxy": "neighbourhood income and population",
-    "median_income_x_price": "income vs price level match",
+    "median_income_x_price": "area income matched to price tier",
     # Price & cuisine fit
     "cuisine_encoded": "cuisine type fit for area",
     "price_level": "price level fit",
@@ -461,10 +461,17 @@ def _format_feature_value(
             ref = _STATE_ABBREV_TO_MEDIAN.get(
                 _STATE_NAME_TO_ABBREV.get(state, ""), _US_MEDIAN_INCOME
             ) if state else _US_MEDIAN_INCOME
-            ref_label = f"{state} median ${ref:,}" if state and state in _STATE_MEDIAN_INCOME else f"US median ${_US_MEDIAN_INCOME:,}"
-            level = "high" if implied_income > ref * 1.35 else ("low" if implied_income < ref * 0.65 else "near avg")
-            return f"tract median ~${implied_income:,.0f}  ({level}, {ref_label})"
-        return f"{v:.2f}  (income × price index)"
+            ref_label = f"{state} median" if state and state in _STATE_MEDIAN_INCOME else "state median"
+            if implied_income > ref * 2.0:
+                note = f"ultra-affluent — high-end dining market already saturated ({ref_label} ${ref:,})"
+            elif implied_income > ref * 1.35:
+                note = f"affluent area suits this price tier ({ref_label} ${ref:,})"
+            elif implied_income < ref * 0.65:
+                note = f"area income may be low for this price tier ({ref_label} ${ref:,})"
+            else:
+                note = f"income well-matched to price tier ({ref_label} ${ref:,})"
+            return f"tract median ~${implied_income:,.0f}  — {note}"
+        return None
 
     if feature in ("median_age", "median_age_500m_avg", "median_age_1000m_avg"):
         if v < 30:
