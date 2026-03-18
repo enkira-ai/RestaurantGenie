@@ -93,11 +93,43 @@ Runtime: 5–15 minutes
 
 **Arguments**
 
-| Argument | Description |
+| Argument | Values |
 |---|---|
-| `address` | Full US address in quotes, e.g. `"1600 N Broad St, Philadelphia PA"` |
-| `cuisine` | One of: `american`, `burgers`, `chinese`, `french`, `greek`, `indian`, `italian`, `japanese`, `korean`, `mediterranean`, `mexican`, `other`, `pizza`, `sandwiches`, `seafood`, `steakhouses`, `thai`, `vietnamese` |
-| `price` | `1` = $ (budget) · `2` = $$ (mid-range) · `3` = $$$ (upscale) · `4` = $$$$ (fine dining) |
+| `address` | Any full US address in quotes, e.g. `"1600 N Broad St, Philadelphia PA"` |
+| `cuisine` | See table below |
+| `price` | See table below |
+
+**Cuisine values**
+
+| Value | Description |
+|---|---|
+| `american` | American / comfort food |
+| `burgers` | Burger joints |
+| `chinese` | Chinese |
+| `french` | French |
+| `greek` | Greek |
+| `indian` | Indian |
+| `italian` | Italian |
+| `japanese` | Japanese (including sushi) |
+| `korean` | Korean |
+| `mediterranean` | Mediterranean |
+| `mexican` | Mexican / Tex-Mex |
+| `pizza` | Pizza |
+| `sandwiches` | Sandwiches / delis |
+| `seafood` | Seafood |
+| `steakhouses` | Steakhouses |
+| `thai` | Thai |
+| `vietnamese` | Vietnamese |
+| `other` | Any cuisine not listed above |
+
+**Price values**
+
+| Value | Symbol | Description |
+|---|---|---|
+| `1` | $ | Budget — most items under $15 |
+| `2` | $$ | Mid-range — most items $15–$40 |
+| `3` | $$$ | Upscale — most items $40–$80 |
+| `4` | $$$$ | Fine dining — most items over $80 |
 
 **Examples**
 
