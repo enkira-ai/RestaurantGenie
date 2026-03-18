@@ -257,7 +257,7 @@ _FEATURE_SUMMARIES = {
     "median_age":                ("demographic profile suits this cuisine", "demographic profile may not suit this cuisine"),
     "income_office_interaction": ("wealthy daytime workers nearby", "few wealthy daytime workers nearby"),
     "income_per_capita_proxy":   ("high income per capita", "low income per capita"),
-    "median_income_x_price":     ("neighbourhood income matches price level", "neighbourhood income may be too low for this price level"),
+    "median_income_x_price":     ("neighbourhood income well-matched to this price level", "income-to-price fit is challenging for this market"),
     "cuisine_encoded":           ("cuisine type suits local demand", "cuisine type may not suit local demand"),
     "price_level":               ("price level suits local market", "price level may not suit local market"),
     "price_tier_success_rate":   ("this price tier performs well in this city", "this price tier has a poor track record in this city"),
@@ -422,7 +422,12 @@ _US_MEDIAN_AGE = 38.8
 _US_MEDIAN_TRACT_POP = 4_100   # typical census tract
 
 
-def _format_feature_value(feature: str, value, state: str | None = None) -> str | None:
+def _format_feature_value(
+    feature: str,
+    value,
+    state: str | None = None,
+    feature_values: dict | None = None,
+) -> str | None:
     """Return a formatted value string with units and qualitative level.
 
     Returns None if no sensible formatting is defined for the feature.
@@ -450,6 +455,15 @@ def _format_feature_value(feature: str, value, state: str | None = None) -> str 
         return f"${v:,.0f}/yr  ({level}, {ref_label})"
 
     if feature == "median_income_x_price":
+        price = float((feature_values or {}).get("price_level") or 0)
+        if price > 0:
+            implied_income = v / price * 100_000
+            ref = _STATE_ABBREV_TO_MEDIAN.get(
+                _STATE_NAME_TO_ABBREV.get(state, ""), _US_MEDIAN_INCOME
+            ) if state else _US_MEDIAN_INCOME
+            ref_label = f"{state} median ${ref:,}" if state and state in _STATE_MEDIAN_INCOME else f"US median ${_US_MEDIAN_INCOME:,}"
+            level = "high" if implied_income > ref * 1.35 else ("low" if implied_income < ref * 0.65 else "near avg")
+            return f"tract median ~${implied_income:,.0f}  ({level}, {ref_label})"
         return f"{v:.2f}  (income × price index)"
 
     if feature in ("median_age", "median_age_500m_avg", "median_age_1000m_avg"):
@@ -557,6 +571,7 @@ def format_output(
     cons: list[dict],
     comparables: list[dict],
     state: str | None = None,
+    all_feature_values: dict | None = None,
 ) -> str:
     # percentile_rank = 100 - pct_below (top 10% means better than 90%)
     # Verdict: top 35% or better is "LIKELY GOOD LOCATION"
@@ -610,8 +625,9 @@ def format_output(
         "-" * 38,
         "  Positive factors:",
     ]
+    fv = all_feature_values or {item["feature"]: item.get("value") for item in pros + cons}
     for p in pros:
-        val_str = _format_feature_value(p["feature"], p.get("value"), state=state)
+        val_str = _format_feature_value(p["feature"], p.get("value"), state=state, feature_values=fv)
         if val_str:
             lines.append(f"    + {p['label']}")
             lines.append(f"        {val_str}")
@@ -621,7 +637,7 @@ def format_output(
         lines.append("    (none identified)")
     lines += ["", "  Negative factors:"]
     for c in cons:
-        val_str = _format_feature_value(c["feature"], c.get("value"), state=state)
+        val_str = _format_feature_value(c["feature"], c.get("value"), state=state, feature_values=fv)
         if val_str:
             lines.append(f"    - {c['label']}")
             lines.append(f"        {val_str}")
@@ -692,7 +708,8 @@ def run_prediction(
     comparables = find_comparable_restaurants(lat, lon, cuisine)
 
     return format_output(address, cuisine, price_level, probability,
-                         percentile_rank, pros, cons, comparables, state=state)
+                         percentile_rank, pros, cons, comparables,
+                         state=state, all_feature_values=feature_values)
 
 
 _VALID_CUISINES = {
