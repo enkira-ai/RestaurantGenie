@@ -212,12 +212,17 @@ out center tags;
 
         rows.sort(key=lambda r: r["distance_km"])
 
-        # Try same cuisine first; fall back to all if not enough
         if cuisine:
-            same = [r for r in rows if r.get("cuisine") and cuisine in r["cuisine"].lower()]
-            if len(same) >= min(top_n, 3):
-                return same[:top_n]
+            # Match on exact OSM cuisine tokens (tags like "italian;pizza" are split on ";")
+            same = [
+                r for r in rows
+                if r.get("cuisine")
+                and any(cuisine == tok.strip() for tok in r["cuisine"].lower().split(";"))
+            ]
+            if same:
+                return same[:top_n]  # always prefer same-cuisine, even if only 1 or 2 found
 
+        # No same-cuisine found — return nearest restaurants of any type as context
         if rows:
             return rows[:top_n]
 

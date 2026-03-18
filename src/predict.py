@@ -350,14 +350,25 @@ def find_comparable_restaurants(
     lon: float,
     cuisine: str,
     top_n: int = 5,
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """Find nearby restaurants from live OSM data, sorted by distance.
 
-    Prefers same cuisine; falls back to all restaurants if fewer than top_n found.
-    Returns list of {"name", "lat", "lon", "cuisine", "distance_km"}.
+    Returns (results, same_cuisine_found). When same_cuisine_found is False
+    the results are restaurants of any cuisine (used as context only).
     """
     from src.features import fetch_restaurants_nearby
-    return fetch_restaurants_nearby(lat, lon, cuisine=cuisine, top_n=top_n)
+
+    # Try same cuisine first
+    same = fetch_restaurants_nearby(lat, lon, cuisine=cuisine, top_n=top_n)
+    if same and any(
+        r.get("cuisine") and any(cuisine == tok.strip() for tok in r["cuisine"].lower().split(";"))
+        for r in same
+    ):
+        return same, True
+
+    # Fall back to all restaurants nearby as context
+    all_nearby = fetch_restaurants_nearby(lat, lon, cuisine=None, top_n=top_n)
+    return all_nearby, False
 
 
 _PRICE_SYMBOLS = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
@@ -589,6 +600,7 @@ def format_output(
     comparables: list[dict],
     state: str | None = None,
     all_feature_values: dict | None = None,
+    same_cuisine_found: bool = True,
 ) -> str:
     # percentile_rank = 100 - pct_below (top 10% means better than 90%)
     # Verdict: top 35% or better is "LIKELY GOOD LOCATION"
@@ -662,17 +674,21 @@ def format_output(
             lines.append(f"    - {c['label']}")
     if not cons:
         lines.append("    (none identified)")
+    if same_cuisine_found:
+        comp_header = f"  NEARBY {cuisine.upper()} RESTAURANTS  (live OSM)"
+    else:
+        comp_header = f"  NEARBY RESTAURANTS  (no {cuisine.title()} found in OSM — showing all)"
     lines += [
         "",
         "-" * 38,
-        "  COMPARABLE RESTAURANTS NEARBY  (live OSM data)",
+        comp_header,
         "-" * 38,
     ]
     for r in comparables:
         cuisine_str = (r.get("cuisine") or "?")[:14]
         lines.append(f"  {r['name'][:30]:<30}  {cuisine_str:<14}  {r['distance_km']}km")
     if not comparables:
-        lines.append("  No restaurants found nearby in OSM.")
+        lines.append(f"  No restaurants found nearby in OSM.")
     lines += ["=" * 38, ""]
     return "\n".join(lines)
 
@@ -722,11 +738,12 @@ def run_prediction(
 
     feature_values = {n: feature_vector[i] for i, n in enumerate(feature_names)}
     pros, cons = get_shap_pros_cons(shap_vals_1d, feature_names, feature_values)
-    comparables = find_comparable_restaurants(lat, lon, cuisine)
+    comparables, same_cuisine_found = find_comparable_restaurants(lat, lon, cuisine)
 
     return format_output(address, cuisine, price_level, probability,
                          percentile_rank, pros, cons, comparables,
-                         state=state, all_feature_values=feature_values)
+                         state=state, all_feature_values=feature_values,
+                         same_cuisine_found=same_cuisine_found)
 
 
 _VALID_CUISINES = {

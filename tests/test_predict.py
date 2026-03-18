@@ -101,10 +101,25 @@ def test_find_comparable_restaurants_uses_osm(mocker):
         {"name": "Sushi Bar",      "lat": 36.173, "lon": -115.143, "cuisine": "japanese","distance_km": 0.6},
     ]
     mocker.patch("src.features.fetch_restaurants_nearby", return_value=osm_rows)
-    results = find_comparable_restaurants(36.17, -115.14, "italian")
+    results, same_cuisine = find_comparable_restaurants(36.17, -115.14, "italian")
+    assert same_cuisine is True
     assert len(results) == 3
     assert results[0]["name"] == "Roma Trattoria"
     assert results[0]["distance_km"] == 0.2
+
+
+def test_find_comparable_restaurants_fallback_when_no_same_cuisine(mocker):
+    from src.predict import find_comparable_restaurants
+    mixed_rows = [
+        {"name": "Burger King",  "cuisine": "burger",   "distance_km": 0.3},
+        {"name": "Taco Bell",    "cuisine": "mexican",  "distance_km": 0.5},
+    ]
+    mocker.patch("src.features.fetch_restaurants_nearby", return_value=mixed_rows)
+    results, same_cuisine = find_comparable_restaurants(36.17, -115.14, "italian")
+    assert same_cuisine is False
+    assert len(results) == 2
+    # No Italian restaurants should have been returned
+    assert not any(r.get("cuisine") == "italian" for r in results)
 
 
 def test_format_output_contains_key_sections():
@@ -177,9 +192,10 @@ def test_run_prediction_end_to_end(tmp_path, mocker):
         "schools_250m": 0, "schools_500m": 1, "schools_1000m": 2,
         "median_income": 80000.0, "total_population": 40000.0, "median_age": 35.0,
     })
-    mocker.patch("src.predict.find_comparable_restaurants", return_value=[
-        {"name": "Test Bistro", "cuisine": "italian", "distance_km": 0.5},
-    ])
+    mocker.patch("src.predict.find_comparable_restaurants", return_value=(
+        [{"name": "Test Bistro", "cuisine": "italian", "distance_km": 0.5}],
+        True,
+    ))
 
     output = run_prediction(
         address="123 Main St, Austin TX",
