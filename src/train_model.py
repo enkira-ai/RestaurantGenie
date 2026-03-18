@@ -48,6 +48,33 @@ FEATURE_COLS = [
     "schools_250m", "schools_500m", "schools_1000m",
     "median_income", "total_population", "median_age",
     "cuisine_encoded", "price_level",
+    # Derived features
+    "same_cuisine_saturation_250m", "same_cuisine_saturation_500m", "same_cuisine_saturation_1000m",
+    "restaurant_bar_ratio_500m",
+    "foot_traffic_proxy_500m",
+    "demand_per_restaurant_500m",
+    "income_office_interaction",
+    "income_per_capita_proxy",
+    "poi_diversity_500m",
+    "total_pois_500m",
+    # Spatial census features
+    "median_income_500m_avg", "median_income_1000m_avg",
+    "total_population_500m_avg", "total_population_1000m_avg",
+    "median_age_500m_avg", "median_age_1000m_avg",
+    "income_variance_1000m",
+    # Price tier features
+    "price_tier_success_rate",
+    "price_tier_count_log",
+    # Yelp spatial features
+    "avg_price_1km", "median_price_1km",
+    "avg_rating_1km", "avg_reviews_1km", "total_reviews_1km",
+    "same_price_1km", "cuisine_entropy_1km",
+    "restaurants_2km",
+    "price_mismatch_1km",
+    "cuisine_gap",
+    "cluster_score",
+    "distance_city_center",
+    "same_cuisine_price_1km",
 ]
 TARGET_COL = "is_successful"
 

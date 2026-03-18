@@ -156,11 +156,19 @@ def generate_neighborhood_features(
     return {**poi_counts, **demographics}
 
 
+_OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+]
+
+
 def fetch_pois_for_bbox(
     south: float, west: float, north: float, east: float
 ) -> list[dict]:
     """Query OSM Overpass for all relevant POIs in the bounding box.
     Returns list of {"lat", "lon", "type", "cuisine"}.
+    Retries across mirror servers on timeout or 5xx errors.
     """
     bbox = f"{south},{west},{north},{east}"
     query = f"""[out:json][timeout:90];
@@ -174,8 +182,17 @@ def fetch_pois_for_bbox(
 );
 out body;
 """
-    response = requests.post(OVERPASS_URL, data=query, timeout=120)
-    response.raise_for_status()
+    last_exc = None
+    for url in _OVERPASS_MIRRORS:
+        try:
+            response = requests.post(url, data=query, timeout=120)
+            response.raise_for_status()
+            break
+        except Exception as e:
+            last_exc = e
+            time.sleep(2)
+    else:
+        raise last_exc
     pois = []
     for el in response.json().get("elements", []):
         tags = el.get("tags", {})

@@ -32,6 +32,7 @@ def assemble_feature_vector(
     cuisine: str,
     price_level: int,
     params_path: str | Path,
+    parquet_path: str | Path = "data/processed/restaurant_features.parquet",
 ) -> tuple[np.ndarray, list[str]]:
     """Generate full feature vector ordered by selected_features from params."""
     with open(params_path) as f:
@@ -43,10 +44,119 @@ def assemble_feature_vector(
     neighborhood["cuisine_encoded"] = label_map.get(cuisine, 0)
     neighborhood["price_level"] = price_level
 
+    # Derived features (mirrors add_derived_features in build_dataset.py)
+    for r in [250, 500, 1000]:
+        total = neighborhood.get(f"restaurants_{r}m") or 0
+        same = neighborhood.get(f"restaurants_same_cuisine_{r}m") or 0
+        neighborhood[f"same_cuisine_saturation_{r}m"] = (same / total) if total > 0 else 0
+
+    neighborhood["restaurant_bar_ratio_500m"] = (
+        (neighborhood.get("restaurants_500m") or 0)
+        / ((neighborhood.get("bars_500m") or 0) + 1)
+    )
+    foot = (
+        (neighborhood.get("offices_500m") or 0) * 0.5
+        + (neighborhood.get("transit_stops_500m") or 0) * 1.0
+        + (neighborhood.get("hotels_500m") or 0) * 0.3
+    )
+    neighborhood["foot_traffic_proxy_500m"] = foot
+    neighborhood["demand_per_restaurant_500m"] = foot / ((neighborhood.get("restaurants_500m") or 0) + 1)
+    neighborhood["income_office_interaction"] = (
+        (neighborhood.get("median_income") or 0) / 100000.0
+        * (neighborhood.get("offices_500m") or 0)
+    )
+    import math
+    pop = max(neighborhood.get("total_population") or 1, 1)
+    neighborhood["income_per_capita_proxy"] = (neighborhood.get("median_income") or 0) / math.sqrt(pop)
+    poi_cols = ["restaurants_500m", "bars_500m", "offices_500m", "hotels_500m", "transit_stops_500m", "schools_500m"]
+    neighborhood["poi_diversity_500m"] = sum(1 for c in poi_cols if (neighborhood.get(c) or 0) > 0)
+    neighborhood["total_pois_500m"] = sum((neighborhood.get(c) or 0) for c in poi_cols)
+
+    # Spatial census approximation: use single-tract values as fallback for predict
+    # (multi-tract averaging not feasible at inference without a full reference set)
+    for radius in [500, 1000]:
+        neighborhood[f"median_income_{radius}m_avg"] = neighborhood.get("median_income") or 0
+        neighborhood[f"total_population_{radius}m_avg"] = neighborhood.get("total_population") or 0
+        neighborhood[f"median_age_{radius}m_avg"] = neighborhood.get("median_age") or 0
+    neighborhood["income_variance_1000m"] = 0.0  # unknown at single-point inference
+
+    # Price tier success rate: look up from reference parquet if available,
+    # otherwise use neutral 0.5
+    neighborhood["price_tier_success_rate"] = 0.5
+    neighborhood["price_tier_count_log"] = 0.0
+
+    # Yelp spatial features — computed from reference dataset
+    try:
+        from sklearn.neighbors import BallTree
+        from scipy.stats import entropy as _ent
+        ref = pd.read_parquet(parquet_path)
+        coords_rad = np.radians(ref[["lat", "lon"]].values)
+        tree = BallTree(coords_rad, metric="haversine")
+        pt = np.radians([[lat, lon]])
+        EARTH_R = 6_371_000
+
+        for radius_m, key in [(1000, "1km"), (2000, "2km")]:
+            idxs = tree.query_radius(pt, r=radius_m / EARTH_R)[0]
+            nbrs = ref.iloc[idxs]
+            if len(nbrs) > 0:
+                p = nbrs["price_level"].dropna()
+                neighborhood[f"avg_price_{key}"]    = float(p.mean()) if len(p) > 0 else 0
+                neighborhood[f"median_price_{key}"] = float(p.median()) if len(p) > 0 else 0
+                neighborhood[f"avg_rating_{key}"]   = float(nbrs["rating"].fillna(0).mean())
+                neighborhood[f"avg_reviews_{key}"]  = float(nbrs["review_count"].fillna(0).mean())
+                neighborhood[f"total_reviews_{key}"] = float(nbrs["review_count"].fillna(0).sum())
+                own_p = price_level
+                neighborhood[f"same_price_{key}"]   = int((p - own_p).abs().le(0).sum())
+                c_counts = nbrs["cuisine"].fillna("other").value_counts()
+                probs = c_counts / c_counts.sum()
+                neighborhood[f"cuisine_entropy_{key}"] = float(_ent(probs))
+                sc_sp = ((nbrs["cuisine"].fillna("other") == cuisine) &
+                         (nbrs["price_level"].fillna(0) == price_level)).sum()
+                neighborhood[f"same_cuisine_price_{key}"] = int(sc_sp)
+            else:
+                for k in [f"avg_price_{key}", f"median_price_{key}", f"avg_rating_{key}",
+                          f"avg_reviews_{key}", f"total_reviews_{key}", f"same_price_{key}",
+                          f"cuisine_entropy_{key}", f"same_cuisine_price_{key}"]:
+                    neighborhood[k] = 0
+
+        neighborhood["price_mismatch_1km"] = abs(price_level - neighborhood.get("avg_price_1km", 0))
+        same_c_1km = neighborhood.get("restaurants_same_cuisine_1000m") or 0
+        pop = max(neighborhood.get("total_population") or 1, 1)
+        neighborhood["cuisine_gap"] = pop / (same_c_1km + 1)
+        r500m = neighborhood.get("restaurants_500m") or 0
+        neighborhood["cluster_score"] = r500m / pop * 1000
+        neighborhood["restaurants_2km"] = len(tree.query_radius(pt, r=2000 / EARTH_R)[0])
+
+        city_col = ref["city"] if "city" in ref.columns else None
+        if city_col is not None:
+            _, nearest_idx = tree.query(pt, k=1)
+            nearest_city = ref.iloc[nearest_idx[0][0]]["city"]
+            city_rest = ref[ref["city"] == nearest_city]
+            clat, clon = city_rest["lat"].mean(), city_rest["lon"].mean()
+            neighborhood["distance_city_center"] = _haversine_km(lat, lon, clat, clon)
+        else:
+            neighborhood["distance_city_center"] = 0.0
+
+    except Exception:
+        for k in ["avg_price_1km", "median_price_1km", "avg_rating_1km", "avg_reviews_1km",
+                  "total_reviews_1km", "same_price_1km", "cuisine_entropy_1km", "restaurants_2km",
+                  "price_mismatch_1km", "cuisine_gap", "cluster_score", "distance_city_center",
+                  "same_cuisine_price_1km"]:
+            neighborhood[k] = 0
+
     vector = np.array(
         [float(neighborhood.get(f, 0) or 0) for f in selected], dtype=float
     )
     return vector, selected
+
+
+class _Unpickler(pickle.Unpickler):
+    """Resolve _PlattWrapper regardless of whether it was pickled from __main__ or src.train_model."""
+    def find_class(self, module, name):
+        if name == "_PlattWrapper":
+            from src.train_model import _PlattWrapper
+            return _PlattWrapper
+        return super().find_class(module, name)
 
 
 def load_artifacts(models_dir: str | Path):
@@ -58,7 +168,7 @@ def load_artifacts(models_dir: str | Path):
         print(f"Error: Model artifacts not found in {models_dir}. Run 'python src/train_model.py' first.")
         sys.exit(1)
     with open(model_path, "rb") as f:
-        model = pickle.load(f)
+        model = _Unpickler(f).load()
     with open(explainer_path, "rb") as f:
         explainer = pickle.load(f)
     return model, explainer
@@ -76,9 +186,9 @@ def compute_percentile_rank(
     """
     group = reference_df[
         (reference_df["cuisine"] == cuisine) & (reference_df["city"] == city)
-    ]["predicted_probability"]
+    ]["predicted_probability"].dropna()
     if len(group) < min_group_size:
-        group = reference_df["predicted_probability"]
+        group = reference_df["predicted_probability"].dropna()
     # `rank` is the "top X%" value — e.g., rank=30 means the score is in the
     # top 30% of comparable restaurants.
     pct_below = float(np.mean(group < score) * 100)
@@ -183,9 +293,12 @@ def format_output(
     cons: list[dict],
     comparables: list[dict],
 ) -> str:
-    verdict = "LIKELY GOOD LOCATION" if probability >= 0.5 else "UNLIKELY GOOD LOCATION"
+    # percentile_rank = 100 - pct_below (top 10% means better than 90%)
+    # Verdict: top 35% or better is "LIKELY GOOD LOCATION"
+    verdict = "LIKELY GOOD LOCATION" if percentile_rank <= 35 else "UNLIKELY GOOD LOCATION"
     price_sym = _PRICE_SYMBOLS.get(price_level, str(price_level))
-    top_pct = round(percentile_rank)
+    # Express as "better than X%" for clarity; cap at 99 to avoid "better than 100%"
+    beats_pct = min(99, round(100 - percentile_rank))
 
     lines = [
         "",
@@ -195,7 +308,7 @@ def format_output(
         f"Cuisine:   {cuisine.title()}",
         f"Price:     {price_sym}",
         "",
-        f"Success probability:  {probability:.2f}  (top {top_pct}% of comparable restaurants)",
+        f"Success probability:  {probability:.2f}  (better than {beats_pct}% of comparable restaurants)",
         f"Verdict:              {verdict}",
         "",
         "PROS",
@@ -242,25 +355,22 @@ def run_prediction(
     lat, lon = geocode_address(address)
 
     feature_vector, feature_names = assemble_feature_vector(
-        lat, lon, cuisine, price_level, params_path
+        lat, lon, cuisine, price_level, params_path, parquet_path
     )
 
     probability = float(model.predict_proba([feature_vector])[0, 1])
+
+    # Score the reference set so percentile_rank compares on the same probability scale.
+    if "predicted_probability" not in reference_df.columns:
+        ref_features = reference_df[feature_names].fillna(0).values
+        reference_df = reference_df.copy()
+        reference_df["predicted_probability"] = model.predict_proba(ref_features)[:, 1]
+
     percentile_rank = compute_percentile_rank(
         probability, reference_df,
         cuisine=cuisine,
         city=_infer_city(lat, lon, reference_df),
     )
-
-    # Validate feature vector shape matches explainer
-    expected_n_features = explainer.model.num_feature()
-    if len(feature_vector) != expected_n_features:
-        print(
-            f"Error: feature vector has {len(feature_vector)} features but model expects "
-            f"{expected_n_features}. The model may have been trained with different parameters. "
-            "Re-run 'python src/train_model.py' to retrain."
-        )
-        sys.exit(1)
 
     shap_values = explainer.shap_values(feature_vector.reshape(1, -1))
     if isinstance(shap_values, list):

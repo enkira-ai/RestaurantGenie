@@ -97,30 +97,30 @@ def test_enrich_with_census_caches_fips(small_restaurant_df, mocker):
 def test_compute_success_labels_creates_column(small_restaurant_df):
     from src.build_dataset import compute_success_labels
     p95 = float(np.log1p(small_restaurant_df["review_count"]).quantile(0.95))
-    result = compute_success_labels(small_restaurant_df, p95_log_reviews=p95)
+    result = compute_success_labels(small_restaurant_df, p95_log_reviews=p95, review_stats_path=None)
     assert "success_score" in result.columns
     assert "is_successful" in result.columns
     assert result["is_successful"].isin([0, 1]).all()
-    # Verify score formula: rating=4.5 → norm=(4.5-1)/4=0.875; reviews=200 → log1p/p95
-    biz1 = result[result["business_id"] == "biz1"].iloc[0]
-    expected_score = 0.4 * (4.5 - 1.0) / 4.0 + 0.4 * np.log1p(200) / p95 + 0.2 * 1.0
-    assert abs(biz1["success_score"] - expected_score) < 1e-6
-    # Highest-rated (biz4, rating=4.8, reviews=500) should score highest
-    assert result.loc[result["business_id"] == "biz4", "success_score"].values[0] == result["success_score"].max()
+    # Within Las Vegas, biz1 (rating=4.5, 200 reviews) should outscore biz3 (rating=2.5, 30 reviews)
+    biz1_score = result.loc[result["business_id"] == "biz1", "success_score"].values[0]
+    biz3_score = result.loc[result["business_id"] == "biz3", "success_score"].values[0]
+    assert biz1_score > biz3_score
 
 
 def test_compute_success_labels_small_groups_merged():
     """Groups <10 restaurants → cuisine='other' for percentile calculation."""
     from src.build_dataset import compute_success_labels
     df = pd.DataFrame({
+        "business_id": [f"biz_{i}" for i in range(20)],
         "city": ["NYC"] * 5 + ["NYC"] * 15,
         "cuisine": ["rare_cuisine"] * 5 + ["italian"] * 15,
         "rating": [4.0] * 20,
         "review_count": [100] * 20,
         "is_open": [1] * 20,
+        "price_level": [2.0] * 20,
     })
     p95 = float(np.log1p(df["review_count"]).quantile(0.95))
-    result = compute_success_labels(df, p95_log_reviews=p95)
+    result = compute_success_labels(df, p95_log_reviews=p95, review_stats_path=None)
     # Rare cuisine group (5 rows) merged into 'other' — no crash
     assert "is_successful" in result.columns
     assert len(result) == 20

@@ -74,7 +74,7 @@ def synthetic_model_df():
     """200-row synthetic dataset across 2 cities for model pipeline tests."""
     rng = np.random.default_rng(42)
     n = 200
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "city": ["CityA"] * 100 + ["CityB"] * 100,
         "cuisine": rng.choice(["italian", "mexican", "chinese"], n).tolist(),
         "price_level": rng.integers(1, 5, n).tolist(),
@@ -104,4 +104,43 @@ def synthetic_model_df():
         "median_age": rng.uniform(25.0, 55.0, n).tolist(),
         "cuisine_encoded": rng.integers(0, 3, n).tolist(),
         "is_successful": rng.integers(0, 2, n).tolist(),
+        # Derived features
+        "same_cuisine_saturation_250m": rng.uniform(0, 1, n).tolist(),
+        "same_cuisine_saturation_500m": rng.uniform(0, 1, n).tolist(),
+        "same_cuisine_saturation_1000m": rng.uniform(0, 1, n).tolist(),
+        "restaurant_bar_ratio_500m": rng.uniform(0, 10, n).tolist(),
+        "foot_traffic_proxy_500m": rng.uniform(0, 20, n).tolist(),
+        "demand_per_restaurant_500m": rng.uniform(0, 5, n).tolist(),
+        "income_office_interaction": rng.uniform(0, 5, n).tolist(),
+        "income_per_capita_proxy": rng.uniform(0, 2000, n).tolist(),
+        "poi_diversity_500m": rng.integers(0, 7, n).tolist(),
+        "total_pois_500m": rng.integers(0, 100, n).tolist(),
     })
+    # Spatial census features (use same values as median_income etc.)
+    for radius in [500, 1000]:
+        df[f"median_income_{radius}m_avg"] = df["median_income"]
+        df[f"total_population_{radius}m_avg"] = df["total_population"]
+        df[f"median_age_{radius}m_avg"] = df["median_age"]
+    df["income_variance_1000m"] = rng.random(200) * 10000
+
+    df["business_id"] = [f"biz_{i}" for i in range(200)]
+
+    # Price tier features
+    df["price_tier_success_rate"] = 0.5
+    df["price_tier_count_log"] = np.log1p(20)
+
+    # Yelp spatial features
+    df["avg_price_1km"] = rng.uniform(1, 4, 200)
+    df["median_price_1km"] = rng.uniform(1, 4, 200)
+    df["avg_rating_1km"] = rng.uniform(3.0, 4.5, 200)
+    df["avg_reviews_1km"] = rng.uniform(50, 500, 200)
+    df["total_reviews_1km"] = rng.uniform(500, 5000, 200)
+    df["same_price_1km"] = rng.integers(0, 10, 200)
+    df["cuisine_entropy_1km"] = rng.uniform(0.5, 2.0, 200)
+    df["restaurants_2km"] = rng.integers(5, 50, 200)
+    df["price_mismatch_1km"] = rng.uniform(0, 2, 200)
+    df["cuisine_gap"] = rng.uniform(100, 10000, 200)
+    df["cluster_score"] = rng.uniform(0, 5, 200)
+    df["distance_city_center"] = rng.uniform(0.1, 10.0, 200)
+    df["same_cuisine_price_1km"] = rng.integers(0, 5, 200)
+    return df
