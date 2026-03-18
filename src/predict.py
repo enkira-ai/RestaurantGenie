@@ -14,13 +14,8 @@ from src.features import generate_neighborhood_features
 _GEOLOCATOR = Nominatim(user_agent="restaurantgenie/1.0")
 
 
-def geocode_address(address: str) -> tuple[float, float, str | None]:
-    """Geocode US address to (lat, lon, city). Exits with message on failure.
-
-    The city is extracted from the Nominatim address components so that
-    price-tier success rates use the correct city without touching the
-    reference dataset.
-    """
+def geocode_address(address: str) -> tuple[float, float, str | None, str | None]:
+    """Geocode US address to (lat, lon, city, state). Exits with message on failure."""
     location = _GEOLOCATOR.geocode(address, country_codes="us", timeout=10, addressdetails=True)
     if location is None:
         print(
@@ -35,7 +30,8 @@ def geocode_address(address: str) -> tuple[float, float, str | None]:
         or addr_raw.get("village")
         or addr_raw.get("county")
     )
-    return location.latitude, location.longitude, city
+    state = addr_raw.get("state")
+    return location.latitude, location.longitude, city, state
 
 
 def assemble_feature_vector(
@@ -347,16 +343,37 @@ def find_comparable_restaurants(
 
 _PRICE_SYMBOLS = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
 
+# State median household incomes — 2022 ACS 5-year estimates
+# Keys are full state names as returned by Nominatim
+_STATE_MEDIAN_INCOME: dict[str, int] = {
+    "Alabama": 54_943, "Alaska": 77_640, "Arizona": 65_913, "Arkansas": 52_528,
+    "California": 84_097, "Colorado": 82_254, "Connecticut": 83_771, "Delaware": 76_048,
+    "District of Columbia": 101_027, "Florida": 63_062, "Georgia": 65_030,
+    "Hawaii": 88_005, "Idaho": 67_473, "Illinois": 72_205, "Indiana": 62_743,
+    "Iowa": 66_054, "Kansas": 65_700, "Kentucky": 57_834, "Louisiana": 54_216,
+    "Maine": 68_251, "Maryland": 94_384, "Massachusetts": 89_645, "Michigan": 65_459,
+    "Minnesota": 80_441, "Mississippi": 48_610, "Missouri": 61_847, "Montana": 63_249,
+    "Nebraska": 68_116, "Nevada": 67_510, "New Hampshire": 90_845, "New Jersey": 96_346,
+    "New Mexico": 54_020, "New York": 75_157, "North Carolina": 62_891,
+    "North Dakota": 70_651, "Ohio": 62_689, "Oklahoma": 57_057, "Oregon": 72_258,
+    "Pennsylvania": 67_587, "Rhode Island": 74_489, "South Carolina": 60_965,
+    "South Dakota": 65_030, "Tennessee": 60_560, "Texas": 67_321, "Utah": 82_646,
+    "Vermont": 72_431, "Virginia": 82_450, "Washington": 87_648,
+    "West Virginia": 51_615, "Wisconsin": 69_943, "Wyoming": 68_002,
+}
+
 # US national benchmarks (2022 ACS)
 _US_MEDIAN_INCOME = 74_580
 _US_MEDIAN_AGE = 38.8
 _US_MEDIAN_TRACT_POP = 4_100   # typical census tract
 
 
-def _format_feature_value(feature: str, value) -> str | None:
+def _format_feature_value(feature: str, value, state: str | None = None) -> str | None:
     """Return a formatted value string with units and qualitative level.
 
     Returns None if no sensible formatting is defined for the feature.
+    state (full name, e.g. "Connecticut") is used to compare income against
+    the state median rather than the US national median.
     """
     if value is None:
         return None
@@ -368,13 +385,15 @@ def _format_feature_value(feature: str, value) -> str | None:
     if feature in ("median_income", "median_income_500m_avg", "median_income_1000m_avg"):
         if v < 0:
             return None
-        if v > _US_MEDIAN_INCOME * 1.35:
+        ref = _STATE_MEDIAN_INCOME.get(state, _US_MEDIAN_INCOME) if state else _US_MEDIAN_INCOME
+        ref_label = f"{state} median ${ref:,}" if state and state in _STATE_MEDIAN_INCOME else f"US median ${ref:,}"
+        if v > ref * 1.35:
             level = "high"
-        elif v < _US_MEDIAN_INCOME * 0.65:
+        elif v < ref * 0.65:
             level = "low"
         else:
-            level = "near US avg"
-        return f"${v:,.0f}/yr  ({level}, US median ${_US_MEDIAN_INCOME:,})"
+            level = "near state avg" if state and state in _STATE_MEDIAN_INCOME else "near avg"
+        return f"${v:,.0f}/yr  ({level}, {ref_label})"
 
     if feature == "median_income_x_price":
         return f"{v:.2f}  (income × price index)"
@@ -472,6 +491,7 @@ def format_output(
     pros: list[dict],
     cons: list[dict],
     comparables: list[dict],
+    state: str | None = None,
 ) -> str:
     # percentile_rank = 100 - pct_below (top 10% means better than 90%)
     # Verdict: top 35% or better is "LIKELY GOOD LOCATION"
@@ -526,7 +546,7 @@ def format_output(
         "  Positive factors:",
     ]
     for p in pros:
-        val_str = _format_feature_value(p["feature"], p.get("value"))
+        val_str = _format_feature_value(p["feature"], p.get("value"), state=state)
         if val_str:
             lines.append(f"    + {p['label']}")
             lines.append(f"        {val_str}")
@@ -536,7 +556,7 @@ def format_output(
         lines.append("    (none identified)")
     lines += ["", "  Negative factors:"]
     for c in cons:
-        val_str = _format_feature_value(c["feature"], c.get("value"))
+        val_str = _format_feature_value(c["feature"], c.get("value"), state=state)
         if val_str:
             lines.append(f"    - {c['label']}")
             lines.append(f"        {val_str}")
@@ -580,7 +600,7 @@ def run_prediction(
     # Slim reference: only name/lat/lon/city/cuisine/price_level/rating/predicted_probability.
     # No stale Yelp feature columns are loaded or used at inference time.
     reference_df = pd.read_parquet(parquet_path)
-    lat, lon, city = geocode_address(address)
+    lat, lon, city, state = geocode_address(address)
     # If Nominatim didn't return a city component, fall back to nearest entry in reference set.
     if city is None:
         city = _infer_city(lat, lon, reference_df)
@@ -607,7 +627,7 @@ def run_prediction(
     comparables = find_comparable_restaurants(lat, lon, cuisine)
 
     return format_output(address, cuisine, price_level, probability,
-                         percentile_rank, pros, cons, comparables)
+                         percentile_rank, pros, cons, comparables, state=state)
 
 
 _VALID_CUISINES = {
