@@ -163,39 +163,63 @@ Optional flags: `--models-dir` (default: `models`), `--parquet` (default: `model
 
 ```
 RestaurantGenie -- Location Analysis
---------------------------------------
-Address:   1600 N Broad St, Philadelphia PA 19121
-Cuisine:   American
-Price:     $$
+======================================
+  Address : 793 Post Rd E, Westport, CT 06880
+  Cuisine : Japanese
+  Price   : $$
+======================================
+  Score   : 93/100  ★★★★★
+  Verdict : ✓  GOOD LOCATION
 
-Success probability:  0.44  (better than 99% of comparable restaurants)
-Verdict:              LIKELY GOOD LOCATION
-
-KEY FACTORS — POSITIVE
-  + price tier success rate          0.51 (51% success rate for $$ in this city)
-  + restaurants within 250m          3 restaurants (low competition)
-  + schools within 1km               4 schools (strong family demand)
-
-KEY FACTORS — NEGATIVE
-  - restaurant density (500m)        28 restaurants (high competition)
-  - cuisine type fit                 encoded=0 (american)
-  - transit stops within 250m        0 stops (low foot traffic)
+  This location scores better than 93% of Japanese $$
+  restaurants in comparable cities.
 
 --------------------------------------
-  NEARBY AMERICAN RESTAURANTS  (live OSM)
+  SUMMARY
 --------------------------------------
-  Masters Bar & Restaurant       american   0.1km
-  honeygrow                      american   0.1km
-  Draught Horse Pub & Grill      american   0.2km
+  This looks like a strong location for a $$ Japanese
+  restaurant. The main strengths are: this price tier performs
+  well in this city; cuisine type suits local demand; high
+  income per capita; price level suits local market. The main
+  risks are: small local population; demographic profile may
+  not suit this cuisine; high nearby competition.
+
+--------------------------------------
+  KEY FACTORS
+--------------------------------------
+  Positive factors:
+    + historical success rate for this price tier in this city
+        34%  (good track record for this price tier)
+    + cuisine type fit for area
+    + neighbourhood income and population
+        tract income $250,001  (high for state), 4,105 residents
+    + price level fit
+
+  Negative factors:
+    - neighbourhood population
+        4,105 people  (typical density)
+    - neighbourhood median age
+        55.6 yrs  (older area, US median 38.8)
+    - area income matched to price tier
+        tract median ~$250,001  — ultra-affluent (Connecticut median $83,771)
+    - restaurant competition (250m)
+        0 nearby  (low competition)
+
+--------------------------------------
+  NEARBY JAPANESE RESTAURANTS  (live OSM)
+--------------------------------------
+  Kiraku Japanese Asian Grill     japanese        6.26km
+  Bar Bushido                     japanese        6.69km
+  Shiki Hana Japanese Bistro      japanese        8.33km
 ```
 
 **Interpreting the output**
 
-- **Success probability** — model's estimated probability this location outperforms comparable restaurants. Higher is better.
-- **Better than X%** — how this location ranks against restaurants of the same cuisine and price tier in the reference dataset.
-- **Verdict** — LIKELY GOOD if the location scores in the top 35% of comparable restaurants.
-- **PROS / CONS** — all SHAP drivers pushing the prediction up or down, with quantitative values and context.
-- **Comparable restaurants** — real restaurants of the same cuisine queried live from OpenStreetMap within ~5km. Sorted by cuisine specificity (dedicated restaurants first) then distance.
+- **Score** — percentile rank (0–100) against restaurants of the same cuisine and price tier in comparable cities. Higher is better.
+- **Verdict** — GOOD LOCATION if the score is above 65.
+- **Summary** — plain-English overview of the strongest positive and negative signals.
+- **Key factors** — all SHAP drivers pushing the prediction up or down, with quantitative values and context (e.g. income relative to state median, actual POI counts).
+- **Comparable restaurants** — same-cuisine restaurants queried live from OpenStreetMap, sorted by cuisine specificity then distance.
 
 ---
 
