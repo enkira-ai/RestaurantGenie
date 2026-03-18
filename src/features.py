@@ -147,6 +147,83 @@ def count_pois_by_type(
     return result
 
 
+def fetch_restaurants_nearby(
+    lat: float,
+    lon: float,
+    cuisine: str | None = None,
+    radius_km: float = 5.0,
+    top_n: int = 5,
+) -> list[dict]:
+    """Query OSM for nearby restaurants, sorted by distance.
+
+    Returns up to top_n entries: {"name", "lat", "lon", "cuisine", "distance_km"}.
+    Tries matching cuisine first; falls back to all restaurants if fewer than top_n found.
+    Expands radius up to 20km if needed.
+    """
+    from math import atan2, cos, radians, sin, sqrt
+
+    def _hav(lat1, lon1, lat2, lon2):
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+        return 6371.0 * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+    for search_radius in [radius_km, min(radius_km * 3, 20.0)]:
+        delta = search_radius / 111.0
+        bbox = f"{lat - delta},{lon - delta},{lat + delta},{lon + delta}"
+        query = f"""[out:json][timeout:60];
+(
+  node["amenity"="restaurant"]({bbox});
+  way["amenity"="restaurant"]({bbox});
+);
+out center tags;
+"""
+        last_exc = None
+        data = None
+        for url in _OVERPASS_MIRRORS:
+            try:
+                resp = requests.post(url, data=query, timeout=90)
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except Exception as e:
+                last_exc = e
+                time.sleep(1)
+        if data is None:
+            raise last_exc
+
+        rows = []
+        for el in data.get("elements", []):
+            tags = el.get("tags", {})
+            r_lat = el.get("lat") or el.get("center", {}).get("lat")
+            r_lon = el.get("lon") or el.get("center", {}).get("lon")
+            if r_lat is None or r_lon is None:
+                continue
+            name = tags.get("name")
+            if not name:
+                continue
+            rows.append({
+                "name": name,
+                "lat": r_lat,
+                "lon": r_lon,
+                "cuisine": tags.get("cuisine"),
+                "distance_km": round(_hav(lat, lon, r_lat, r_lon), 2),
+            })
+
+        rows.sort(key=lambda r: r["distance_km"])
+
+        # Try same cuisine first; fall back to all if not enough
+        if cuisine:
+            same = [r for r in rows if r.get("cuisine") and cuisine in r["cuisine"].lower()]
+            if len(same) >= min(top_n, 3):
+                return same[:top_n]
+
+        if rows:
+            return rows[:top_n]
+
+    return []
+
+
 _PADDING_DEG = 0.012   # ~1.3km padding each side
 
 

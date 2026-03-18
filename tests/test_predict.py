@@ -92,21 +92,18 @@ def test_get_shap_pros_cons():
     assert any("restaurants_500m" in c["feature"] for c in cons)
 
 
-def test_find_comparable_restaurants_filters_by_cuisine_and_price():
+def test_find_comparable_restaurants_uses_osm(mocker):
     from src.predict import find_comparable_restaurants
-    df = pd.DataFrame({
-        "name": ["A", "B", "C", "D"],
-        "cuisine": ["italian", "italian", "mexican", "italian"],
-        "price_level": [2.0, 3.0, 2.0, 4.0],
-        "rating": [4.5, 4.2, 3.9, 4.8],
-        "lat": [36.17, 36.175, 36.16, 36.18],
-        "lon": [-115.14, -115.143, -115.15, -115.13],
-    })
-    results, _ = find_comparable_restaurants(36.17, -115.14, "italian", 2, df)
-    cuisines = [r["cuisine"] for r in results]
-    assert "mexican" not in cuisines
-    prices = [r["price_level"] for r in results]
-    assert all(abs(p - 2) <= 1 for p in prices)   # ±1 price level
+    osm_rows = [
+        {"name": "Roma Trattoria", "lat": 36.171, "lon": -115.141, "cuisine": "italian", "distance_km": 0.2},
+        {"name": "Pizza Napoli",   "lat": 36.172, "lon": -115.142, "cuisine": "pizza",   "distance_km": 0.4},
+        {"name": "Sushi Bar",      "lat": 36.173, "lon": -115.143, "cuisine": "japanese","distance_km": 0.6},
+    ]
+    mocker.patch("src.features.fetch_restaurants_nearby", return_value=osm_rows)
+    results = find_comparable_restaurants(36.17, -115.14, "italian")
+    assert len(results) == 3
+    assert results[0]["name"] == "Roma Trattoria"
+    assert results[0]["distance_km"] == 0.2
 
 
 def test_format_output_contains_key_sections():
@@ -119,8 +116,7 @@ def test_format_output_contains_key_sections():
         percentile_rank=71.0,
         pros=[{"feature": "offices_500m", "label": "high office density", "value": 15, "shap": 0.3}],
         cons=[{"feature": "restaurants_500m", "label": "restaurant saturation", "value": 40, "shap": -0.2}],
-        comparables=[{"name": "Olive Garden", "cuisine": "italian",
-                      "price_level": 2, "rating": 4.1, "distance_km": 1.2}],
+        comparables=[{"name": "Olive Garden", "cuisine": "italian", "distance_km": 1.2}],
     )
     assert "GOOD LOCATION" in output or "POOR LOCATION" in output
     assert "SUMMARY" in output
@@ -180,6 +176,9 @@ def test_run_prediction_end_to_end(tmp_path, mocker):
         "schools_250m": 0, "schools_500m": 1, "schools_1000m": 2,
         "median_income": 80000.0, "total_population": 40000.0, "median_age": 35.0,
     })
+    mocker.patch("src.predict.find_comparable_restaurants", return_value=[
+        {"name": "Test Bistro", "cuisine": "italian", "distance_km": 0.5},
+    ])
 
     output = run_prediction(
         address="123 Main St, Austin TX",

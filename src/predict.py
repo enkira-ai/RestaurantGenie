@@ -334,41 +334,133 @@ def find_comparable_restaurants(
     lat: float,
     lon: float,
     cuisine: str,
-    price_level: int,
-    reference_df: pd.DataFrame,
     top_n: int = 5,
-) -> tuple[list[dict], str | None]:
-    """Find nearby restaurants of similar cuisine and price level.
+) -> list[dict]:
+    """Find nearby restaurants from live OSM data, sorted by distance.
 
-    Tries increasing radii (5km → 50km → 300km). Returns (results, note) where
-    note is a string explaining the fallback radius, or None if results are local.
+    Prefers same cuisine; falls back to all restaurants if fewer than top_n found.
+    Returns list of {"name", "lat", "lon", "cuisine", "distance_km"}.
     """
-    df = reference_df.copy()
-    df["_dist"] = _haversine_km_vec(lat, lon, df["lat"].to_numpy(), df["lon"].to_numpy())
-    cuisine_price_mask = (
-        (df["cuisine"] == cuisine)
-        & (df["price_level"].notna())
-        & ((df["price_level"] - price_level).abs() <= 1)
-    )
-
-    for radius_km, note in [(5, None), (50, "within 50km"), (300, "within 300km — no local data available for this area")]:
-        nearby = df[cuisine_price_mask & (df["_dist"] <= radius_km)].sort_values("_dist").head(top_n)
-        if not nearby.empty:
-            return [
-                {
-                    "name": row["name"],
-                    "cuisine": row["cuisine"],
-                    "price_level": row["price_level"],
-                    "rating": row["rating"] if pd.notna(row["rating"]) else None,
-                    "distance_km": round(row["_dist"], 1),
-                }
-                for _, row in nearby.iterrows()
-            ], note
-
-    return [], "No comparable restaurants found in the reference dataset."
+    from src.features import fetch_restaurants_nearby
+    return fetch_restaurants_nearby(lat, lon, cuisine=cuisine, top_n=top_n)
 
 
 _PRICE_SYMBOLS = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
+
+# US national benchmarks (2022 ACS)
+_US_MEDIAN_INCOME = 74_580
+_US_MEDIAN_AGE = 38.8
+_US_MEDIAN_TRACT_POP = 4_100   # typical census tract
+
+
+def _format_feature_value(feature: str, value) -> str | None:
+    """Return a formatted value string with units and qualitative level.
+
+    Returns None if no sensible formatting is defined for the feature.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if feature in ("median_income", "median_income_500m_avg", "median_income_1000m_avg"):
+        if v < 0:
+            return None
+        if v > _US_MEDIAN_INCOME * 1.35:
+            level = "high"
+        elif v < _US_MEDIAN_INCOME * 0.65:
+            level = "low"
+        else:
+            level = "near US avg"
+        return f"${v:,.0f}/yr  ({level}, US median ${_US_MEDIAN_INCOME:,})"
+
+    if feature == "median_income_x_price":
+        return f"{v:.2f}  (income × price index)"
+
+    if feature in ("median_age", "median_age_500m_avg", "median_age_1000m_avg"):
+        if v < 30:
+            level = "young area"
+        elif v > 50:
+            level = "older area"
+        else:
+            level = "near US avg"
+        return f"{v:.1f} yrs  ({level}, US median {_US_MEDIAN_AGE})"
+
+    if feature in ("total_population", "total_population_500m_avg", "total_population_1000m_avg"):
+        if v < 0:
+            return None
+        if v > _US_MEDIAN_TRACT_POP * 1.5:
+            level = "dense tract"
+        elif v < _US_MEDIAN_TRACT_POP * 0.5:
+            level = "sparse tract"
+        else:
+            level = "typical density"
+        return f"{v:,.0f} people  ({level})"
+
+    if feature.startswith("restaurants_") and "same_cuisine" not in feature and "saturation" not in feature:
+        radius = feature.split("_")[-1]  # e.g. "500m"
+        thresholds = {"250m": (5, 12), "500m": (10, 25), "1000m": (25, 60)}
+        lo, hi = thresholds.get(radius, (10, 25))
+        level = "high competition" if v > hi else ("moderate" if v > lo else "low competition")
+        return f"{int(v)} nearby  ({level})"
+
+    if feature.startswith("restaurants_same_cuisine_"):
+        radius = feature.split("_")[-1]
+        thresholds = {"250m": (2, 6), "500m": (4, 12), "1000m": (8, 25)}
+        lo, hi = thresholds.get(radius, (4, 12))
+        level = "heavily contested" if v > hi else ("some competition" if v > lo else "low same-cuisine competition")
+        return f"{int(v)} same-cuisine  ({level})"
+
+    if feature.startswith("bars_"):
+        radius = feature.split("_")[-1]
+        thresholds = {"250m": (1, 4), "500m": (3, 10), "1000m": (6, 20)}
+        lo, hi = thresholds.get(radius, (3, 10))
+        level = "strong nightlife" if v > hi else ("some nightlife" if v > lo else "quiet area")
+        return f"{int(v)} bars  ({level})"
+
+    if feature.startswith("offices_"):
+        radius = feature.split("_")[-1]
+        thresholds = {"250m": (2, 6), "500m": (5, 15), "1000m": (10, 30)}
+        lo, hi = thresholds.get(radius, (5, 15))
+        level = "strong office district" if v > hi else ("some offices" if v > lo else "few offices")
+        return f"{int(v)} offices  ({level})"
+
+    if feature.startswith("transit_stops_"):
+        radius = feature.split("_")[-1]
+        level = "excellent access" if v >= 4 else ("good access" if v >= 2 else ("limited" if v == 1 else "none"))
+        return f"{int(v)} stops  ({level})"
+
+    if feature.startswith("hotels_"):
+        level = "tourist area" if v >= 3 else ("some tourist traffic" if v >= 1 else "few tourists")
+        return f"{int(v)} hotels  ({level})"
+
+    if feature.startswith("schools_"):
+        level = "family area" if v >= 3 else ("some families" if v >= 1 else "few schools")
+        return f"{int(v)} schools  ({level})"
+
+    if feature == "foot_traffic_proxy_500m":
+        level = "high" if v > 8 else ("moderate" if v > 3 else "low")
+        return f"{v:.1f}  ({level} foot traffic)"
+
+    if feature == "poi_diversity_500m":
+        level = "very mixed" if v >= 5 else ("varied" if v >= 3 else "limited variety")
+        return f"{int(v)}/6 POI types  ({level})"
+
+    if feature == "price_tier_success_rate":
+        level = "good track record" if v >= 0.25 else ("average" if v >= 0.15 else "poor track record")
+        return f"{v * 100:.0f}%  ({level} for this price tier)"
+
+    if feature == "income_office_interaction":
+        level = "strong" if v > 0.5 else ("moderate" if v > 0.15 else "weak")
+        return f"{v:.2f}  ({level} wealthy-office signal)"
+
+    if feature == "income_per_capita_proxy":
+        level = "high" if v > 1200 else ("moderate" if v > 500 else "low")
+        return f"{v:.0f}  ({level})"
+
+    return None
 
 
 def format_output(
@@ -380,7 +472,6 @@ def format_output(
     pros: list[dict],
     cons: list[dict],
     comparables: list[dict],
-    comparables_note: str | None = None,
 ) -> str:
     # percentile_rank = 100 - pct_below (top 10% means better than 90%)
     # Verdict: top 35% or better is "LIKELY GOOD LOCATION"
@@ -435,29 +526,35 @@ def format_output(
         "  Positive factors:",
     ]
     for p in pros:
-        lines.append(f"    + {p['label']}")
+        val_str = _format_feature_value(p["feature"], p.get("value"))
+        if val_str:
+            lines.append(f"    + {p['label']}")
+            lines.append(f"        {val_str}")
+        else:
+            lines.append(f"    + {p['label']}")
     if not pros:
         lines.append("    (none identified)")
     lines += ["", "  Negative factors:"]
     for c in cons:
-        lines.append(f"    - {c['label']}")
+        val_str = _format_feature_value(c["feature"], c.get("value"))
+        if val_str:
+            lines.append(f"    - {c['label']}")
+            lines.append(f"        {val_str}")
+        else:
+            lines.append(f"    - {c['label']}")
     if not cons:
         lines.append("    (none identified)")
-    comparable_header = "  COMPARABLE RESTAURANTS NEARBY"
-    if comparables_note:
-        comparable_header += f" ({comparables_note})"
     lines += [
         "",
         "-" * 38,
-        comparable_header,
+        "  COMPARABLE RESTAURANTS NEARBY  (live OSM data)",
         "-" * 38,
     ]
     for r in comparables:
-        rating_str = f"{r['rating']:.1f}★" if r.get("rating") is not None else "n/a"
-        p_sym = _PRICE_SYMBOLS.get(int(r["price_level"]), "?")
-        lines.append(f"  {r['name'][:28]:<28}  {r['cuisine']:<12} {p_sym}  {rating_str}  {r['distance_km']}km")
+        cuisine_str = (r.get("cuisine") or "?")[:14]
+        lines.append(f"  {r['name'][:30]:<30}  {cuisine_str:<14}  {r['distance_km']}km")
     if not comparables:
-        lines.append("  No comparable restaurants found in the reference dataset.")
+        lines.append("  No restaurants found nearby in OSM.")
     lines += ["=" * 38, ""]
     return "\n".join(lines)
 
@@ -507,10 +604,10 @@ def run_prediction(
 
     feature_values = {n: feature_vector[i] for i, n in enumerate(feature_names)}
     pros, cons = get_shap_pros_cons(shap_vals_1d, feature_names, feature_values)
-    comparables, comparables_note = find_comparable_restaurants(lat, lon, cuisine, price_level, reference_df)
+    comparables = find_comparable_restaurants(lat, lon, cuisine)
 
     return format_output(address, cuisine, price_level, probability,
-                         percentile_rank, pros, cons, comparables, comparables_note)
+                         percentile_rank, pros, cons, comparables)
 
 
 _VALID_CUISINES = {
