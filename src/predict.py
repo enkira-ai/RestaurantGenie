@@ -213,7 +213,7 @@ _FEATURE_LABELS = {
     "total_population_1000m_avg": "population density within 1km",
     "median_age_500m_avg": "average age within 500m",
     "income_office_interaction": "wealthy daytime workers nearby",
-    "income_per_capita_proxy": "income per capita (city-size adjusted)",
+    "income_per_capita_proxy": "neighbourhood income and population",
     "median_income_x_price": "income vs price level match",
     # Price & cuisine fit
     "cuisine_encoded": "cuisine type fit for area",
@@ -544,8 +544,18 @@ def _format_feature_value(
         return f"{v:.2f}  ({level} wealthy-office signal)"
 
     if feature == "income_per_capita_proxy":
+        # Back-calculate the underlying components: proxy = median_income / sqrt(population)
+        # Show median income and population separately — the raw index is not human-readable
+        income = (feature_values or {}).get("median_income") or (feature_values or {}).get("median_income_500m_avg")
+        pop = (feature_values or {}).get("total_population") or (feature_values or {}).get("total_population_500m_avg")
+        if income and pop:
+            ref = _STATE_ABBREV_TO_MEDIAN.get(
+                _STATE_NAME_TO_ABBREV.get(state, ""), _US_MEDIAN_INCOME
+            ) if state else _US_MEDIAN_INCOME
+            inc_level = "high" if income > ref * 1.35 else ("low" if income < ref * 0.65 else "avg")
+            return f"tract income ${income:,.0f}  ({inc_level} for state), {int(pop):,} residents"
         level = "high" if v > 1200 else ("moderate" if v > 500 else "low")
-        return f"{v:.0f}  ({level})"
+        return f"{level} income relative to local population"
 
     if feature == "income_relative_to_state":
         pct = round((v - 1.0) * 100)
