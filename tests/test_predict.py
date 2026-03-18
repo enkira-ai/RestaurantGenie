@@ -117,9 +117,8 @@ def test_find_comparable_restaurants_fallback_when_no_same_cuisine(mocker):
     mocker.patch("src.features.fetch_restaurants_nearby", return_value=mixed_rows)
     results, same_cuisine = find_comparable_restaurants(36.17, -115.14, "italian")
     assert same_cuisine is False
-    assert len(results) == 2
-    # No Italian restaurants should have been returned
-    assert not any(r.get("cuisine") == "italian" for r in results)
+    # When no same-cuisine restaurants found, return empty list (no fallback)
+    assert len(results) == 0
 
 
 def test_format_output_contains_key_sections():

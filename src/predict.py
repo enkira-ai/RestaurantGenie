@@ -351,24 +351,18 @@ def find_comparable_restaurants(
     cuisine: str,
     top_n: int = 5,
 ) -> tuple[list[dict], bool]:
-    """Find nearby restaurants from live OSM data, sorted by distance.
+    """Find nearby restaurants of the requested cuisine from live OSM data.
 
-    Returns (results, same_cuisine_found). When same_cuisine_found is False
-    the results are restaurants of any cuisine (used as context only).
+    Returns (results, found). found=False means no same-cuisine restaurants
+    were in OSM near this address; results will be empty in that case.
     """
     from src.features import fetch_restaurants_nearby
-
-    # Try same cuisine first
-    same = fetch_restaurants_nearby(lat, lon, cuisine=cuisine, top_n=top_n)
-    if same and any(
+    results = fetch_restaurants_nearby(lat, lon, cuisine=cuisine, top_n=top_n)
+    found = bool(results) and any(
         r.get("cuisine") and any(cuisine == tok.strip() for tok in r["cuisine"].lower().split(";"))
-        for r in same
-    ):
-        return same, True
-
-    # Fall back to all restaurants nearby as context
-    all_nearby = fetch_restaurants_nearby(lat, lon, cuisine=None, top_n=top_n)
-    return all_nearby, False
+        for r in results
+    )
+    return (results if found else []), found
 
 
 _PRICE_SYMBOLS = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
