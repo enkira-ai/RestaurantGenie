@@ -251,41 +251,68 @@ def format_output(
 ) -> str:
     # percentile_rank = 100 - pct_below (top 10% means better than 90%)
     # Verdict: top 35% or better is "LIKELY GOOD LOCATION"
-    verdict = "LIKELY GOOD LOCATION" if percentile_rank <= 35 else "UNLIKELY GOOD LOCATION"
+    is_good = percentile_rank <= 35
+    verdict = "GOOD LOCATION" if is_good else "POOR LOCATION"
+    verdict_icon = "✓" if is_good else "✗"
     price_sym = _PRICE_SYMBOLS.get(price_level, str(price_level))
-    # Express as "better than X%" for clarity; cap at 99 to avoid "better than 100%"
+
+    # Location score: 0–100 where 100 = best possible vs comparable restaurants
     beats_pct = min(99, round(100 - percentile_rank))
+    score = beats_pct  # "beats X% of comparable restaurants" == score of X/100
+
+    # Star rating 1–5 mapped from score
+    if score >= 80:
+        stars = "★★★★★"
+    elif score >= 60:
+        stars = "★★★★☆"
+    elif score >= 40:
+        stars = "★★★☆☆"
+    elif score >= 20:
+        stars = "★★☆☆☆"
+    else:
+        stars = "★☆☆☆☆"
 
     lines = [
         "",
         "RestaurantGenie -- Location Analysis",
+        "=" * 38,
+        f"  Address : {address}",
+        f"  Cuisine : {cuisine.title()}",
+        f"  Price   : {price_sym}",
+        "=" * 38,
+        f"  Score   : {score}/100  {stars}",
+        f"  Verdict : {verdict_icon}  {verdict}",
+        "",
+        f"  This location scores better than {beats_pct}% of {cuisine.title()} {price_sym}",
+        f"  restaurants in comparable cities.",
+        "",
         "-" * 38,
-        f"Address:   {address}",
-        f"Cuisine:   {cuisine.title()}",
-        f"Price:     {price_sym}",
-        "",
-        f"Success probability:  {probability:.2f}  (better than {beats_pct}% of comparable restaurants)",
-        f"Verdict:              {verdict}",
-        "",
-        "PROS",
+        "  WHY THIS SCORE",
+        "-" * 38,
+        "  Positive factors:",
     ]
     for p in pros:
-        lines.append(f"  + {p['label']}")
+        lines.append(f"    + {p['label']}")
     if not pros:
-        lines.append("  (no strong positive signals)")
-    lines += ["", "CONS"]
+        lines.append("    (none identified)")
+    lines += ["", "  Negative factors:"]
     for c in cons:
-        lines.append(f"  - {c['label']}")
+        lines.append(f"    - {c['label']}")
     if not cons:
-        lines.append("  (no strong negative signals)")
-    lines += ["", "Comparable restaurants nearby:"]
+        lines.append("    (none identified)")
+    lines += [
+        "",
+        "-" * 38,
+        "  COMPARABLE RESTAURANTS NEARBY",
+        "-" * 38,
+    ]
     for r in comparables:
-        stars = f"{r['rating']:.1f}" if r.get("rating") is not None else "n/a"
+        rating_str = f"{r['rating']:.1f}★" if r.get("rating") is not None else "n/a"
         p_sym = _PRICE_SYMBOLS.get(int(r["price_level"]), "?")
-        lines.append(f"  {r['name'][:30]:<30} ({r['cuisine']}, {p_sym})  {stars}  {r['distance_km']}km")
+        lines.append(f"  {r['name'][:28]:<28}  {r['cuisine']:<12} {p_sym}  {rating_str}  {r['distance_km']}km")
     if not comparables:
         lines.append("  No comparable restaurants found within 5km.")
-    lines.append("")
+    lines += ["=" * 38, ""]
     return "\n".join(lines)
 
 
