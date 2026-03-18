@@ -152,8 +152,8 @@ Runtime: 5–15 minutes
 
 ```bash
 uv run python -W ignore -m src.predict \
-  --address "1600 N Broad St, Philadelphia PA" \
-  --cuisine american \
+  --address "793 Post Rd E, Westport, CT 06880" \
+  --cuisine japanese \
   --price 2
 ```
 
