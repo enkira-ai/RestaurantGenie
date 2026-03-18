@@ -103,6 +103,7 @@ def synthetic_model_df():
         "total_population": rng.integers(1000, 50000, n).tolist(),
         "median_age": rng.uniform(25.0, 55.0, n).tolist(),
         "cuisine_encoded": rng.integers(0, 3, n).tolist(),
+        "review_count": rng.integers(5, 500, n).tolist(),
         "is_successful": rng.integers(0, 2, n).tolist(),
         # Derived features
         "same_cuisine_saturation_250m": rng.uniform(0, 1, n).tolist(),

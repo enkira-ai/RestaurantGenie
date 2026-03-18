@@ -1,7 +1,7 @@
-Feature selection: 16 of 58 features retained
-Selected features: ['restaurants_250m', 'restaurants_1000m', 'cuisine_encoded', 'price_level', 'same_cuisine_saturation_250m', 'restaurant_bar_ratio_500m', 'price_tier_success_rate', 'price_tier_count_log', 'avg_price_1km', 'avg_rating_1km', 'avg_reviews_1km', 'total_reviews_1km', 'same_price_1km', 'cuisine_entropy_1km', 'restaurants_2km', 'distance_city_center']
-Best hyperparameters: {'num_leaves': 61, 'max_depth': 4, 'min_child_samples': 143, 'lambda_l1': 4.709268321392572, 'lambda_l2': 0.6104183821350206, 'feature_fraction': 0.7406883212042542, 'bagging_fraction': 0.7202432327296192, 'learning_rate': 0.03706369961265623}
-n_estimators (refit): 246
-Geographic CV ROC-AUC (train_search_set, 5-fold): 0.6490
-Test-city ROC-AUC (held-out, uncalibrated): 0.6436
-Test-city Brier score (calibrated): 0.1983
+Feature selection: 15 of 46 features retained
+Selected features: ['restaurants_250m', 'restaurants_500m', 'restaurants_same_cuisine_250m', 'restaurants_same_cuisine_500m', 'bars_500m', 'offices_250m', 'offices_500m', 'offices_1000m', 'transit_stops_250m', 'transit_stops_1000m', 'schools_1000m', 'cuisine_encoded', 'price_level', 'poi_diversity_500m', 'price_tier_success_rate']
+Best hyperparameters: {'num_leaves': 113, 'max_depth': 7, 'min_child_samples': 147, 'lambda_l1': 2.1637280559024568, 'lambda_l2': 3.6047930570941387, 'feature_fraction': 0.9134336554829187, 'bagging_fraction': 0.7153888601903944, 'learning_rate': 0.03976090046490729}
+n_estimators (refit): 162
+Geographic CV ROC-AUC (train_search_set, 5-fold): 0.6799
+Test-city ROC-AUC (held-out, uncalibrated): 0.6820
+Test-city Brier score (calibrated): 0.1353

@@ -62,19 +62,12 @@ FEATURE_COLS = [
     "total_population_500m_avg", "total_population_1000m_avg",
     "median_age_500m_avg", "median_age_1000m_avg",
     "income_variance_1000m",
-    # Price tier features
-    "price_tier_success_rate",
-    "price_tier_count_log",
-    # Yelp spatial features
-    "avg_price_1km", "median_price_1km",
-    "avg_rating_1km", "avg_reviews_1km", "total_reviews_1km",
-    "same_price_1km", "cuisine_entropy_1km",
-    "restaurants_2km",
-    "price_mismatch_1km",
+    # OSM+Census derived (no Yelp dependency)
     "cuisine_gap",
     "cluster_score",
-    "distance_city_center",
-    "same_cuisine_price_1km",
+    # Price tier success rate — stored in normalization_params at train time,
+    # looked up at inference via (city, price_level); falls back to global average
+    "price_tier_success_rate",
 ]
 TARGET_COL = "is_successful"
 
@@ -257,6 +250,7 @@ def save_artifacts(
     best_params: dict,
     params_path: str | Path,
     model_dir: str | Path,
+    price_tier_rates: dict | None = None,
 ) -> None:
     """Save model.pkl, shap_explainer.pkl, updated normalization_params.json."""
     model_dir = Path(model_dir)
@@ -269,14 +263,16 @@ def save_artifacts(
     with open(model_dir / "shap_explainer.pkl", "wb") as f:
         pickle.dump(explainer, f)
 
-    # Update normalization_params.json with selected_features and best_params
+    # Update normalization_params.json with selected_features, best_params,
+    # and price tier success rates for inference-time lookup
     with open(params_path) as f:
         params = json.load(f)
     params["selected_features"] = selected_features
     params["best_hyperparameters"] = best_params
+    if price_tier_rates is not None:
+        params["price_tier_rates"] = price_tier_rates
     with open(params_path, "w") as f:
         json.dump(params, f, indent=2)
-
     print(f"Saved model artifacts to {model_dir}/")
 
 
@@ -346,6 +342,22 @@ def train_model(
     print("Evaluating on test cities...")
     metrics = evaluate_on_test(calibrated_model, base_lgbm, X_test_sel, y_test)
 
+    # Build price tier lookup: per-(city, price_level) success rate with
+    # global-per-price-level fallback for cities not seen at training time.
+    eligible = df[df["review_count"] >= 15].copy()
+    global_by_price = (
+        eligible.groupby("price_level")[TARGET_COL].mean()
+        .rename(lambda p: str(int(p))).to_dict()
+    )
+    city_price = (
+        eligible.groupby(["city", "price_level"])[TARGET_COL].mean()
+        .reset_index()
+    )
+    city_price_rates: dict[str, dict] = {}
+    for _, row in city_price.iterrows():
+        city_price_rates.setdefault(row["city"], {})[str(int(row["price_level"]))] = float(row[TARGET_COL])
+    price_tier_rates = {"global": global_by_price, "by_city": city_price_rates}
+
     save_artifacts(
         calibrated_model=calibrated_model,
         base_lgbm=base_lgbm,
@@ -353,6 +365,7 @@ def train_model(
         best_params=best_params,
         params_path=params_path,
         model_dir=models_dir,
+        price_tier_rates=price_tier_rates,
     )
 
     # Score all rows and write predicted_probability back to parquet

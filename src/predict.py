@@ -32,9 +32,12 @@ def assemble_feature_vector(
     cuisine: str,
     price_level: int,
     params_path: str | Path,
-    parquet_path: str | Path = "data/processed/restaurant_features.parquet",
+    parquet_path: str | Path = "data/processed/restaurant_features.parquet",  # unused, kept for API compat
+    city: str | None = None,
 ) -> tuple[np.ndarray, list[str]]:
-    """Generate full feature vector ordered by selected_features from params."""
+    """Generate full feature vector ordered by selected_features from params.
+    All features come from free sources: OSM Overpass and US Census ACS.
+    """
     with open(params_path) as f:
         params = json.load(f)
     label_map: dict = params["cuisine_label_map"]
@@ -73,76 +76,26 @@ def assemble_feature_vector(
     neighborhood["total_pois_500m"] = sum((neighborhood.get(c) or 0) for c in poi_cols)
 
     # Spatial census approximation: use single-tract values as fallback for predict
-    # (multi-tract averaging not feasible at inference without a full reference set)
     for radius in [500, 1000]:
         neighborhood[f"median_income_{radius}m_avg"] = neighborhood.get("median_income") or 0
         neighborhood[f"total_population_{radius}m_avg"] = neighborhood.get("total_population") or 0
         neighborhood[f"median_age_{radius}m_avg"] = neighborhood.get("median_age") or 0
-    neighborhood["income_variance_1000m"] = 0.0  # unknown at single-point inference
+    neighborhood["income_variance_1000m"] = 0.0
 
-    # Price tier success rate: look up from reference parquet if available,
-    # otherwise use neutral 0.5
-    neighborhood["price_tier_success_rate"] = 0.5
-    neighborhood["price_tier_count_log"] = 0.0
+    # OSM+Census derived — no external API needed
+    same_c_1km = neighborhood.get("restaurants_same_cuisine_1000m") or 0
+    r500m = neighborhood.get("restaurants_500m") or 0
+    neighborhood["cuisine_gap"] = pop / (same_c_1km + 1)
+    neighborhood["cluster_score"] = r500m / pop * 1000
 
-    # Yelp spatial features — computed from reference dataset
-    try:
-        from sklearn.neighbors import BallTree
-        from scipy.stats import entropy as _ent
-        ref = pd.read_parquet(parquet_path)
-        coords_rad = np.radians(ref[["lat", "lon"]].values)
-        tree = BallTree(coords_rad, metric="haversine")
-        pt = np.radians([[lat, lon]])
-        EARTH_R = 6_371_000
-
-        for radius_m, key in [(1000, "1km"), (2000, "2km")]:
-            idxs = tree.query_radius(pt, r=radius_m / EARTH_R)[0]
-            nbrs = ref.iloc[idxs]
-            if len(nbrs) > 0:
-                p = nbrs["price_level"].dropna()
-                neighborhood[f"avg_price_{key}"]    = float(p.mean()) if len(p) > 0 else 0
-                neighborhood[f"median_price_{key}"] = float(p.median()) if len(p) > 0 else 0
-                neighborhood[f"avg_rating_{key}"]   = float(nbrs["rating"].fillna(0).mean())
-                neighborhood[f"avg_reviews_{key}"]  = float(nbrs["review_count"].fillna(0).mean())
-                neighborhood[f"total_reviews_{key}"] = float(nbrs["review_count"].fillna(0).sum())
-                own_p = price_level
-                neighborhood[f"same_price_{key}"]   = int((p - own_p).abs().le(0).sum())
-                c_counts = nbrs["cuisine"].fillna("other").value_counts()
-                probs = c_counts / c_counts.sum()
-                neighborhood[f"cuisine_entropy_{key}"] = float(_ent(probs))
-                sc_sp = ((nbrs["cuisine"].fillna("other") == cuisine) &
-                         (nbrs["price_level"].fillna(0) == price_level)).sum()
-                neighborhood[f"same_cuisine_price_{key}"] = int(sc_sp)
-            else:
-                for k in [f"avg_price_{key}", f"median_price_{key}", f"avg_rating_{key}",
-                          f"avg_reviews_{key}", f"total_reviews_{key}", f"same_price_{key}",
-                          f"cuisine_entropy_{key}", f"same_cuisine_price_{key}"]:
-                    neighborhood[k] = 0
-
-        neighborhood["price_mismatch_1km"] = abs(price_level - neighborhood.get("avg_price_1km", 0))
-        same_c_1km = neighborhood.get("restaurants_same_cuisine_1000m") or 0
-        pop = max(neighborhood.get("total_population") or 1, 1)
-        neighborhood["cuisine_gap"] = pop / (same_c_1km + 1)
-        r500m = neighborhood.get("restaurants_500m") or 0
-        neighborhood["cluster_score"] = r500m / pop * 1000
-        neighborhood["restaurants_2km"] = len(tree.query_radius(pt, r=2000 / EARTH_R)[0])
-
-        city_col = ref["city"] if "city" in ref.columns else None
-        if city_col is not None:
-            _, nearest_idx = tree.query(pt, k=1)
-            nearest_city = ref.iloc[nearest_idx[0][0]]["city"]
-            city_rest = ref[ref["city"] == nearest_city]
-            clat, clon = city_rest["lat"].mean(), city_rest["lon"].mean()
-            neighborhood["distance_city_center"] = _haversine_km(lat, lon, clat, clon)
-        else:
-            neighborhood["distance_city_center"] = 0.0
-
-    except Exception:
-        for k in ["avg_price_1km", "median_price_1km", "avg_rating_1km", "avg_reviews_1km",
-                  "total_reviews_1km", "same_price_1km", "cuisine_entropy_1km", "restaurants_2km",
-                  "price_mismatch_1km", "cuisine_gap", "cluster_score", "distance_city_center",
-                  "same_cuisine_price_1km"]:
-            neighborhood[k] = 0
+    # Price tier success rate — lookup table stored at train time, free at inference
+    price_tier_rates = params.get("price_tier_rates", {})
+    global_rates = price_tier_rates.get("global", {})
+    city_rates = price_tier_rates.get("by_city", {})
+    p_key = str(price_level)
+    city_specific = city_rates.get(city, {}).get(p_key) if city else None
+    global_fallback = global_rates.get(p_key, 0.2)
+    neighborhood["price_tier_success_rate"] = city_specific if city_specific is not None else global_fallback
 
     vector = np.array(
         [float(neighborhood.get(f, 0) or 0) for f in selected], dtype=float
@@ -353,9 +306,10 @@ def run_prediction(
     model, explainer = load_artifacts(models_dir)
     reference_df = pd.read_parquet(parquet_path)
     lat, lon = geocode_address(address)
+    city = _infer_city(lat, lon, reference_df)
 
     feature_vector, feature_names = assemble_feature_vector(
-        lat, lon, cuisine, price_level, params_path, parquet_path
+        lat, lon, cuisine, price_level, params_path, parquet_path, city=city
     )
 
     probability = float(model.predict_proba([feature_vector])[0, 1])
@@ -369,7 +323,7 @@ def run_prediction(
     percentile_rank = compute_percentile_rank(
         probability, reference_df,
         cuisine=cuisine,
-        city=_infer_city(lat, lon, reference_df),
+        city=city,
     )
 
     shap_values = explainer.shap_values(feature_vector.reshape(1, -1))
