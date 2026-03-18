@@ -312,19 +312,19 @@ def get_shap_pros_cons(
     shap_values: np.ndarray,
     feature_names: list[str],
     feature_values: dict,
-    top_n: int = 3,
 ) -> tuple[list[dict], list[dict]]:
-    """Return top_n pros (positive SHAP) and cons (negative SHAP)."""
+    """Return all features split into pros (positive SHAP) and cons (negative SHAP),
+    each sorted by absolute impact (largest first)."""
     pairs = list(zip(shap_values, feature_names))
     pairs_sorted = sorted(pairs, key=lambda x: x[0], reverse=True)
     pros = [
         {"feature": f, "label": _FEATURE_LABELS.get(f, f), "value": feature_values.get(f), "shap": s}
         for s, f in pairs_sorted if s > 0
-    ][:top_n]
+    ]
     cons = [
         {"feature": f, "label": _FEATURE_LABELS.get(f, f), "value": feature_values.get(f), "shap": s}
         for s, f in reversed(pairs_sorted) if s < 0
-    ][:top_n]
+    ]
     return pros, cons
 
 
