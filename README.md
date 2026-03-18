@@ -164,22 +164,22 @@ Price:     $$
 Success probability:  0.44  (better than 99% of comparable restaurants)
 Verdict:              LIKELY GOOD LOCATION
 
-PROS
-  + price_tier_success_rate
-  + restaurants_250m
-  + schools_1000m
+KEY FACTORS — POSITIVE
+  + price tier success rate          0.51 (51% success rate for $$ in this city)
+  + restaurants within 250m          3 restaurants (low competition)
+  + schools within 1km               4 schools (strong family demand)
 
-CONS
-  - restaurant density (500m)
-  - cuisine type fit
-  - transit_stops_250m
+KEY FACTORS — NEGATIVE
+  - restaurant density (500m)        28 restaurants (high competition)
+  - cuisine type fit                 encoded=0 (american)
+  - transit stops within 250m        0 stops (low foot traffic)
 
-Comparable restaurants nearby:
-  Brocks Wings & Things          (american, $$)  2.0  0.0km
-  Masters Bar & Restaurant       (american, $$)  3.5  0.1km
-  honeygrow                      (american, $)   3.5  0.1km
-  Draught Horse Pub & Grill      (american, $$)  3.0  0.2km
-  Pub Webb                       (american, $)   4.0  0.3km
+--------------------------------------
+  NEARBY AMERICAN RESTAURANTS  (live OSM)
+--------------------------------------
+  Masters Bar & Restaurant       american   0.1km
+  honeygrow                      american   0.1km
+  Draught Horse Pub & Grill      american   0.2km
 ```
 
 **Interpreting the output**
@@ -187,8 +187,8 @@ Comparable restaurants nearby:
 - **Success probability** — model's estimated probability this location outperforms comparable restaurants. Higher is better.
 - **Better than X%** — how this location ranks against restaurants of the same cuisine and price tier in the reference dataset.
 - **Verdict** — LIKELY GOOD if the location scores in the top 35% of comparable restaurants.
-- **PROS / CONS** — top SHAP drivers pushing the prediction up or down.
-- **Comparable restaurants** — real restaurants of the same cuisine within ±1 price tier and 5km, from the Yelp training set.
+- **PROS / CONS** — all SHAP drivers pushing the prediction up or down, with quantitative values and context.
+- **Comparable restaurants** — real restaurants of the same cuisine queried live from OpenStreetMap within ~5km. Sorted by cuisine specificity (dedicated restaurants first) then distance.
 
 ---
 
@@ -227,7 +227,7 @@ Where, within each (city, cuisine, price tier) peer group:
 | Held-out city ROC-AUC | 0.683 |
 | Calibrated Brier score | 0.135 |
 
-### Surviving features (16 of 47 candidates)
+### Surviving features (19 of 50 candidates)
 
 All features are derivable for free at inference time from OSM Overpass + US Census ACS + a lookup table stored in `models/normalization_params.json`. No paid API is required.
 
@@ -249,6 +249,9 @@ All features are derivable for free at inference time from OSM Overpass + US Cen
 | `total_population_500m_avg` | Census derived | Local density |
 | `price_tier_success_rate` | Training lookup | Historical success rate for this price tier in this city |
 | `median_income_x_price` | Census × Input | Income × price level interaction (expensive restaurants need wealthier areas) |
+| `income_relative_to_state` | Census derived | Household income as ratio of state median (normalises across states) |
+| `income_level_state_cat` | Census derived | Categorical: below (< 0.75×), near (0.75–1.25×), or above (> 1.25×) state median |
+| `state_encoded` | Input | State identifier (restaurant economics vary by state) |
 
 ### Hyperparameters
 
@@ -269,7 +272,7 @@ n_estimators: 56
 uv run pytest tests/ -v
 ```
 
-33 tests covering feature engineering, success label computation, model pipeline, and prediction.
+34 tests covering feature engineering, success label computation, model pipeline, and prediction.
 
 ---
 
