@@ -153,19 +153,133 @@ def compute_percentile_rank(
 
 
 _FEATURE_LABELS = {
-    "restaurants_500m": "restaurant density (500m)",
+    # Competition
+    "restaurants_250m": "restaurant competition (250m)",
+    "restaurants_500m": "restaurant competition (500m)",
+    "restaurants_1000m": "restaurant competition (1km)",
+    "restaurants_same_cuisine_250m": "same-cuisine competition (250m)",
     "restaurants_same_cuisine_500m": "same-cuisine competition (500m)",
+    "restaurants_same_cuisine_1000m": "same-cuisine competition (1km)",
+    "same_cuisine_saturation_250m": "same-cuisine saturation (250m)",
+    "same_cuisine_saturation_500m": "same-cuisine saturation (500m)",
+    "same_cuisine_saturation_1000m": "same-cuisine saturation (1km)",
+    # Foot traffic demand
+    "bars_250m": "nightlife density (250m)",
     "bars_500m": "nightlife density (500m)",
-    "offices_500m": "office density (500m)",
-    "hotels_500m": "hotel density (500m)",
+    "bars_1000m": "nightlife density (1km)",
+    "offices_250m": "office / daytime workers (250m)",
+    "offices_500m": "office / daytime workers (500m)",
+    "offices_1000m": "office / daytime workers (1km)",
+    "hotels_250m": "hotels nearby (250m)",
+    "hotels_500m": "hotels nearby (500m)",
+    "hotels_1000m": "hotels nearby (1km)",
+    "transit_stops_250m": "transit access (250m)",
     "transit_stops_500m": "transit access (500m)",
+    "transit_stops_1000m": "transit access (1km)",
+    "schools_250m": "schools nearby (250m)",
     "schools_500m": "schools nearby (500m)",
-    "median_income": "neighborhood median income",
-    "total_population": "neighborhood population",
-    "median_age": "neighborhood median age",
-    "cuisine_encoded": "cuisine type fit",
+    "schools_1000m": "schools nearby (1km)",
+    "foot_traffic_proxy_500m": "estimated foot traffic (offices + transit + hotels)",
+    "demand_per_restaurant_500m": "foot traffic per competing restaurant",
+    "restaurant_bar_ratio_500m": "restaurant-to-bar ratio (entertainment vs residential)",
+    "poi_diversity_500m": "neighbourhood activity variety",
+    "total_pois_500m": "total nearby points of interest",
+    # Demographics
+    "median_income": "neighbourhood median household income",
+    "total_population": "neighbourhood population",
+    "median_age": "neighbourhood median age",
+    "median_income_500m_avg": "average income within 500m",
+    "median_income_1000m_avg": "average income within 1km",
+    "total_population_500m_avg": "population density within 500m",
+    "total_population_1000m_avg": "population density within 1km",
+    "median_age_500m_avg": "average age within 500m",
+    "income_office_interaction": "wealthy daytime workers nearby",
+    "income_per_capita_proxy": "income per capita (city-size adjusted)",
+    "median_income_x_price": "income vs price level match",
+    # Price & cuisine fit
+    "cuisine_encoded": "cuisine type fit for area",
     "price_level": "price level fit",
+    "price_tier_success_rate": "historical success rate for this price tier in this city",
+    # Spatial
+    "cuisine_gap": "unmet demand for this cuisine",
+    "cluster_score": "restaurant cluster density",
+    "distance_city_center": "distance from city centre",
 }
+
+
+_FEATURE_SUMMARIES = {
+    "restaurants_250m":          ("low nearby competition", "high nearby competition"),
+    "restaurants_500m":          ("low nearby competition", "high nearby competition"),
+    "restaurants_1000m":         ("low competition in the area", "heavy competition in the area"),
+    "restaurants_same_cuisine_250m": ("few same-cuisine rivals nearby", "many same-cuisine rivals nearby"),
+    "restaurants_same_cuisine_500m": ("few same-cuisine rivals nearby", "many same-cuisine rivals nearby"),
+    "restaurants_same_cuisine_1000m": ("few same-cuisine rivals in the area", "many same-cuisine rivals in the area"),
+    "same_cuisine_saturation_250m":  ("unders­aturated cuisine niche nearby", "over-saturated cuisine niche nearby"),
+    "same_cuisine_saturation_1000m": ("undersaturated cuisine niche in the area", "over-saturated cuisine niche in the area"),
+    "bars_500m":                 ("strong nightlife / evening foot traffic", "low nightlife foot traffic"),
+    "bars_1000m":                ("strong nightlife / evening foot traffic nearby", "low nightlife foot traffic nearby"),
+    "offices_250m":              ("strong lunch demand from nearby offices", "few offices nearby for lunch trade"),
+    "offices_500m":              ("strong lunch demand from nearby offices", "few offices nearby for lunch trade"),
+    "offices_1000m":             ("good office lunch demand in the area", "limited office lunch demand"),
+    "transit_stops_250m":        ("excellent transit access", "poor transit access"),
+    "transit_stops_500m":        ("good transit access", "limited transit access"),
+    "transit_stops_1000m":       ("transit access nearby", "limited transit access in the area"),
+    "schools_1000m":             ("schools nearby drive family dining demand", "few schools nearby"),
+    "hotels_250m":               ("hotels nearby drive tourist dining demand", "few hotels nearby"),
+    "foot_traffic_proxy_500m":   ("high estimated foot traffic", "low estimated foot traffic"),
+    "demand_per_restaurant_500m": ("high demand relative to competition", "low demand relative to competition"),
+    "poi_diversity_500m":        ("diverse, active neighbourhood", "low neighbourhood activity"),
+    "median_income":             ("affluent neighbourhood supports dining spend", "lower-income area may limit spend"),
+    "total_population":          ("large local population", "small local population"),
+    "median_age":                ("demographic profile suits this cuisine", "demographic profile may not suit this cuisine"),
+    "income_office_interaction": ("wealthy daytime workers nearby", "few wealthy daytime workers nearby"),
+    "income_per_capita_proxy":   ("high income per capita", "low income per capita"),
+    "median_income_x_price":     ("neighbourhood income matches price level", "neighbourhood income may be too low for this price level"),
+    "cuisine_encoded":           ("cuisine type suits local demand", "cuisine type may not suit local demand"),
+    "price_level":               ("price level suits local market", "price level may not suit local market"),
+    "price_tier_success_rate":   ("this price tier performs well in this city", "this price tier has a poor track record in this city"),
+    "cuisine_gap":               ("underserved demand for this cuisine", "plenty of this cuisine already available"),
+    "cluster_score":             ("strong restaurant cluster — destination dining area", "sparse restaurant area"),
+}
+
+
+def build_summary(
+    cuisine: str,
+    price_level: int,
+    score: int,
+    pros: list[dict],
+    cons: list[dict],
+) -> str:
+    """Build a plain-English paragraph explaining the score."""
+    price_sym = _PRICE_SYMBOLS.get(price_level, str(price_level))
+    if score >= 70:
+        opening = f"This looks like a strong location for a {price_sym} {cuisine.title()} restaurant."
+    elif score >= 50:
+        opening = f"This is a reasonable location for a {price_sym} {cuisine.title()} restaurant with some caveats."
+    elif score >= 30:
+        opening = f"This location has meaningful challenges for a {price_sym} {cuisine.title()} restaurant."
+    else:
+        opening = f"This location is a poor fit for a {price_sym} {cuisine.title()} restaurant."
+
+    pro_phrases = []
+    for p in pros:
+        f = p["feature"]
+        if f in _FEATURE_SUMMARIES:
+            pro_phrases.append(_FEATURE_SUMMARIES[f][0])
+
+    con_phrases = []
+    for c in cons:
+        f = c["feature"]
+        if f in _FEATURE_SUMMARIES:
+            con_phrases.append(_FEATURE_SUMMARIES[f][1])
+
+    parts = [opening]
+    if pro_phrases:
+        parts.append("The main strengths are: " + "; ".join(pro_phrases) + ".")
+    if con_phrases:
+        parts.append("The main risks are: " + "; ".join(con_phrases) + ".")
+
+    return " ".join(parts)
 
 
 def get_shap_pros_cons(
@@ -272,6 +386,11 @@ def format_output(
     else:
         stars = "★☆☆☆☆"
 
+    summary = build_summary(cuisine, price_level, score, pros, cons)
+    # Word-wrap summary to 60 chars
+    import textwrap
+    summary_lines = textwrap.wrap(summary, width=60)
+
     lines = [
         "",
         "RestaurantGenie -- Location Analysis",
@@ -287,7 +406,12 @@ def format_output(
         f"  restaurants in comparable cities.",
         "",
         "-" * 38,
-        "  WHY THIS SCORE",
+        "  SUMMARY",
+        "-" * 38,
+    ] + [f"  {line}" for line in summary_lines] + [
+        "",
+        "-" * 38,
+        "  KEY FACTORS",
         "-" * 38,
         "  Positive factors:",
     ]

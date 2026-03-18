@@ -115,15 +115,14 @@ def test_format_output_contains_key_sections():
         price_level=2,
         probability=0.71,
         percentile_rank=71.0,
-        pros=[{"label": "high office density", "value": 15, "shap": 0.3}],
-        cons=[{"label": "restaurant saturation", "value": 40, "shap": -0.2}],
+        pros=[{"feature": "offices_500m", "label": "high office density", "value": 15, "shap": 0.3}],
+        cons=[{"feature": "restaurants_500m", "label": "restaurant saturation", "value": 40, "shap": -0.2}],
         comparables=[{"name": "Olive Garden", "cuisine": "italian",
                       "price_level": 2, "rating": 4.1, "distance_km": 1.2}],
     )
-    assert "0.71" in output
-    assert "LIKELY GOOD" in output or "UNLIKELY" in output
-    assert "PROS" in output
-    assert "CONS" in output
+    assert "GOOD LOCATION" in output or "POOR LOCATION" in output
+    assert "SUMMARY" in output
+    assert "KEY FACTORS" in output
     assert "Olive Garden" in output
 
 
@@ -188,5 +187,6 @@ def test_run_prediction_end_to_end(tmp_path, mocker):
         parquet_path=tmp_path / "restaurant_features.parquet",
         params_path=tmp_path / "normalization_params.json",
     )
-    assert "0.70" in output
-    assert "PROS" in output
+    assert "GOOD LOCATION" in output or "POOR LOCATION" in output
+    assert "SUMMARY" in output
+    assert "KEY FACTORS" in output
