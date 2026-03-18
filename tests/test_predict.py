@@ -10,10 +10,12 @@ def test_geocode_address_success(mocker):
     mock_location = mocker.MagicMock()
     mock_location.latitude = 36.17
     mock_location.longitude = -115.14
+    mock_location.raw = {"address": {"city": "Las Vegas"}}
     mocker.patch("src.predict.Nominatim.geocode", return_value=mock_location)
-    lat, lon = geocode_address("123 Main St, Las Vegas, NV")
+    lat, lon, city = geocode_address("123 Main St, Las Vegas, NV")
     assert abs(lat - 36.17) < 0.001
     assert abs(lon + 115.14) < 0.001
+    assert city == "Las Vegas"
 
 
 def test_geocode_address_failure_raises(mocker):
@@ -100,7 +102,7 @@ def test_find_comparable_restaurants_filters_by_cuisine_and_price():
         "lat": [36.17, 36.175, 36.16, 36.18],
         "lon": [-115.14, -115.143, -115.15, -115.13],
     })
-    results = find_comparable_restaurants(36.17, -115.14, "italian", 2, df, max_distance_km=5)
+    results, _ = find_comparable_restaurants(36.17, -115.14, "italian", 2, df)
     cuisines = [r["cuisine"] for r in results]
     assert "mexican" not in cuisines
     prices = [r["price_level"] for r in results]
@@ -159,14 +161,14 @@ def test_run_prediction_end_to_end(tmp_path, mocker):
         "lon": [-97.74],
         "predicted_probability": [0.65],
     })
-    ref_df.to_parquet(tmp_path / "restaurant_features.parquet")
+    ref_df.to_parquet(tmp_path / "reference_scores.parquet")
 
     explainer_mock = mocker.MagicMock()
     explainer_mock.model.num_feature.return_value = 2
     explainer_mock.shap_values.return_value = np.array([[0.3, -0.1]])
 
     mocker.patch("src.predict.load_artifacts", return_value=(cal, explainer_mock))
-    mocker.patch("src.predict.geocode_address", return_value=(30.27, -97.74))
+    mocker.patch("src.predict.geocode_address", return_value=(30.27, -97.74, "Austin"))
     mocker.patch("src.predict.generate_neighborhood_features", return_value={
         "restaurants_250m": 5, "restaurants_500m": 10, "restaurants_1000m": 20,
         "restaurants_same_cuisine_250m": None, "restaurants_same_cuisine_500m": None,
@@ -184,7 +186,7 @@ def test_run_prediction_end_to_end(tmp_path, mocker):
         cuisine="italian",
         price_level=2,
         models_dir=tmp_path,
-        parquet_path=tmp_path / "restaurant_features.parquet",
+        parquet_path=tmp_path / "reference_scores.parquet",
         params_path=tmp_path / "normalization_params.json",
     )
     assert "GOOD LOCATION" in output or "POOR LOCATION" in output

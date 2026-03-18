@@ -372,11 +372,18 @@ def train_model(
         price_tier_rates=price_tier_rates,
     )
 
-    # Score all rows and write predicted_probability back to parquet
+    # Score all rows and write predicted_probability back to full parquet
     X_all = df[FEATURE_COLS].values.astype(float)[:, feat_idx]
     df["predicted_probability"] = calibrated_model.predict_proba(X_all)[:, 1]
     df.to_parquet(parquet_path, index=False)
     print("Wrote predicted_probability to parquet.")
+
+    # Save slim reference file for inference — no stale feature columns
+    slim_cols = ["name", "lat", "lon", "city", "cuisine", "price_level", "rating", "predicted_probability"]
+    available_slim = [c for c in slim_cols if c in df.columns]
+    slim_path = models_dir / "reference_scores.parquet"
+    df[available_slim].to_parquet(slim_path, index=False)
+    print(f"Saved slim reference scores ({len(df)} restaurants) to {slim_path}")
 
     # Performance report
     report_lines = [

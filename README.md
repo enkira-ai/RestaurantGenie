@@ -78,8 +78,10 @@ Runtime: ~15 minutes
 uv run python -m src.train_model
 ```
 
-Output: `models/model.pkl`, `models/shap_explainer.pkl`, `models/normalization_params.json`, `models/performance_report.txt`
+Output: `models/model.pkl`, `models/shap_explainer.pkl`, `models/normalization_params.json`, `models/performance_report.txt`, `models/reference_scores.parquet`
 Runtime: 5–15 minutes
+
+`reference_scores.parquet` is a slim 5 MB file (8 columns: name, lat, lon, city, cuisine, price_level, rating, predicted_probability) used at inference time for percentile ranking and comparable restaurant display. It contains no stale feature columns — all feature computation at inference time uses live OSM + Census data.
 
 ---
 
@@ -148,7 +150,7 @@ uv run python -W ignore -m src.predict \
   --price 2
 ```
 
-Optional flags: `--models-dir` (default: `models`), `--parquet` (default: `data/processed/restaurant_features.parquet`), `--params` (default: `models/normalization_params.json`)
+Optional flags: `--models-dir` (default: `models`), `--parquet` (default: `models/reference_scores.parquet`), `--params` (default: `models/normalization_params.json`)
 
 ### Example output
 

@@ -14,16 +14,28 @@ from src.features import generate_neighborhood_features
 _GEOLOCATOR = Nominatim(user_agent="restaurantgenie/1.0")
 
 
-def geocode_address(address: str) -> tuple[float, float]:
-    """Geocode US address to (lat, lon) using Nominatim. Exits with message on failure."""
-    location = _GEOLOCATOR.geocode(address, country_codes="us", timeout=10)
+def geocode_address(address: str) -> tuple[float, float, str | None]:
+    """Geocode US address to (lat, lon, city). Exits with message on failure.
+
+    The city is extracted from the Nominatim address components so that
+    price-tier success rates use the correct city without touching the
+    reference dataset.
+    """
+    location = _GEOLOCATOR.geocode(address, country_codes="us", timeout=10, addressdetails=True)
     if location is None:
         print(
             f'Error: Could not geocode address "{address}". '
             "Try a more specific address including city and state."
         )
         sys.exit(1)
-    return location.latitude, location.longitude
+    addr_raw = location.raw.get("address", {})
+    city = (
+        addr_raw.get("city")
+        or addr_raw.get("town")
+        or addr_raw.get("village")
+        or addr_raw.get("county")
+    )
+    return location.latitude, location.longitude, city
 
 
 def assemble_feature_vector(
@@ -32,7 +44,6 @@ def assemble_feature_vector(
     cuisine: str,
     price_level: int,
     params_path: str | Path,
-    parquet_path: str | Path = "data/processed/restaurant_features.parquet",  # unused, kept for API compat
     city: str | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Generate full feature vector ordered by selected_features from params.
@@ -325,29 +336,36 @@ def find_comparable_restaurants(
     cuisine: str,
     price_level: int,
     reference_df: pd.DataFrame,
-    max_distance_km: float = 5.0,
     top_n: int = 5,
-) -> list[dict]:
-    """Find nearby restaurants of similar cuisine and price level."""
+) -> tuple[list[dict], str | None]:
+    """Find nearby restaurants of similar cuisine and price level.
+
+    Tries increasing radii (5km → 50km → 300km). Returns (results, note) where
+    note is a string explaining the fallback radius, or None if results are local.
+    """
     df = reference_df.copy()
     df["_dist"] = _haversine_km_vec(lat, lon, df["lat"].to_numpy(), df["lon"].to_numpy())
-    mask = (
+    cuisine_price_mask = (
         (df["cuisine"] == cuisine)
         & (df["price_level"].notna())
         & ((df["price_level"] - price_level).abs() <= 1)
-        & (df["_dist"] <= max_distance_km)
     )
-    nearby = df[mask].sort_values("_dist").head(top_n)
-    return [
-        {
-            "name": row["name"],
-            "cuisine": row["cuisine"],
-            "price_level": row["price_level"],
-            "rating": row["rating"] if pd.notna(row["rating"]) else None,
-            "distance_km": round(row["_dist"], 1),
-        }
-        for _, row in nearby.iterrows()
-    ]
+
+    for radius_km, note in [(5, None), (50, "within 50km"), (300, "within 300km — no local data available for this area")]:
+        nearby = df[cuisine_price_mask & (df["_dist"] <= radius_km)].sort_values("_dist").head(top_n)
+        if not nearby.empty:
+            return [
+                {
+                    "name": row["name"],
+                    "cuisine": row["cuisine"],
+                    "price_level": row["price_level"],
+                    "rating": row["rating"] if pd.notna(row["rating"]) else None,
+                    "distance_km": round(row["_dist"], 1),
+                }
+                for _, row in nearby.iterrows()
+            ], note
+
+    return [], "No comparable restaurants found in the reference dataset."
 
 
 _PRICE_SYMBOLS = {1: "$", 2: "$$", 3: "$$$", 4: "$$$$"}
@@ -362,6 +380,7 @@ def format_output(
     pros: list[dict],
     cons: list[dict],
     comparables: list[dict],
+    comparables_note: str | None = None,
 ) -> str:
     # percentile_rank = 100 - pct_below (top 10% means better than 90%)
     # Verdict: top 35% or better is "LIKELY GOOD LOCATION"
@@ -424,10 +443,13 @@ def format_output(
         lines.append(f"    - {c['label']}")
     if not cons:
         lines.append("    (none identified)")
+    comparable_header = "  COMPARABLE RESTAURANTS NEARBY"
+    if comparables_note:
+        comparable_header += f" ({comparables_note})"
     lines += [
         "",
         "-" * 38,
-        "  COMPARABLE RESTAURANTS NEARBY",
+        comparable_header,
         "-" * 38,
     ]
     for r in comparables:
@@ -435,7 +457,7 @@ def format_output(
         p_sym = _PRICE_SYMBOLS.get(int(r["price_level"]), "?")
         lines.append(f"  {r['name'][:28]:<28}  {r['cuisine']:<12} {p_sym}  {rating_str}  {r['distance_km']}km")
     if not comparables:
-        lines.append("  No comparable restaurants found within 5km.")
+        lines.append("  No comparable restaurants found in the reference dataset.")
     lines += ["=" * 38, ""]
     return "\n".join(lines)
 
@@ -454,25 +476,23 @@ def run_prediction(
     cuisine: str,
     price_level: int,
     models_dir: str | Path = "models",
-    parquet_path: str | Path = "data/processed/restaurant_features.parquet",
+    parquet_path: str | Path = "models/reference_scores.parquet",
     params_path: str | Path = "models/normalization_params.json",
 ) -> str:
     model, explainer = load_artifacts(models_dir)
+    # Slim reference: only name/lat/lon/city/cuisine/price_level/rating/predicted_probability.
+    # No stale Yelp feature columns are loaded or used at inference time.
     reference_df = pd.read_parquet(parquet_path)
-    lat, lon = geocode_address(address)
-    city = _infer_city(lat, lon, reference_df)
+    lat, lon, city = geocode_address(address)
+    # If Nominatim didn't return a city component, fall back to nearest entry in reference set.
+    if city is None:
+        city = _infer_city(lat, lon, reference_df)
 
     feature_vector, feature_names = assemble_feature_vector(
-        lat, lon, cuisine, price_level, params_path, parquet_path, city=city
+        lat, lon, cuisine, price_level, params_path, city=city
     )
 
     probability = float(model.predict_proba([feature_vector])[0, 1])
-
-    # Score the reference set so percentile_rank compares on the same probability scale.
-    if "predicted_probability" not in reference_df.columns:
-        ref_features = reference_df[feature_names].fillna(0).values
-        reference_df = reference_df.copy()
-        reference_df["predicted_probability"] = model.predict_proba(ref_features)[:, 1]
 
     percentile_rank = compute_percentile_rank(
         probability, reference_df,
@@ -487,26 +507,45 @@ def run_prediction(
 
     feature_values = {n: feature_vector[i] for i, n in enumerate(feature_names)}
     pros, cons = get_shap_pros_cons(shap_vals_1d, feature_names, feature_values)
-    comparables = find_comparable_restaurants(lat, lon, cuisine, price_level, reference_df)
+    comparables, comparables_note = find_comparable_restaurants(lat, lon, cuisine, price_level, reference_df)
 
     return format_output(address, cuisine, price_level, probability,
-                         percentile_rank, pros, cons, comparables)
+                         percentile_rank, pros, cons, comparables, comparables_note)
+
+
+_VALID_CUISINES = {
+    "american", "burgers", "chinese", "french", "greek", "indian", "italian",
+    "japanese", "korean", "mediterranean", "mexican", "other", "pizza",
+    "sandwiches", "seafood", "steakhouses", "thai", "vietnamese",
+}
 
 
 def main():
+    import difflib
+
     parser = argparse.ArgumentParser(description="RestaurantGenie -- location success predictor")
     parser.add_argument("--address", required=True, help='Full US address e.g. "123 Main St, Austin TX"')
     parser.add_argument("--cuisine", required=True, help='Cuisine type e.g. italian, mexican, pizza')
     parser.add_argument("--price", type=int, choices=[1, 2, 3, 4], required=True,
                         help="Price level: 1=$ 2=$$ 3=$$$ 4=$$$$")
     parser.add_argument("--models-dir", default="models")
-    parser.add_argument("--parquet", default="data/processed/restaurant_features.parquet")
+    parser.add_argument("--parquet", default="models/reference_scores.parquet")
     parser.add_argument("--params", default="models/normalization_params.json")
     args = parser.parse_args()
 
+    cuisine = args.cuisine.lower().strip()
+    if cuisine not in _VALID_CUISINES:
+        matches = difflib.get_close_matches(cuisine, _VALID_CUISINES, n=3, cutoff=0.6)
+        msg = f"Unknown cuisine '{cuisine}'."
+        if matches:
+            msg += f" Did you mean: {', '.join(matches)}?"
+        msg += f"\nValid cuisines: {', '.join(sorted(_VALID_CUISINES))}"
+        print(msg)
+        sys.exit(1)
+
     output = run_prediction(
         address=args.address,
-        cuisine=args.cuisine,
+        cuisine=cuisine,
         price_level=args.price,
         models_dir=args.models_dir,
         parquet_path=args.parquet,
