@@ -2,6 +2,19 @@
 
 Predicts whether a US address is a good location for a new restaurant, given cuisine type and price level. Returns a success probability, verdict, key drivers (via SHAP), and a list of comparable nearby restaurants.
 
+## Quick start
+
+The trained model is included in `models/`. Three commands to get a prediction:
+
+```bash
+git clone https://github.com/enkira-ai/RestaurantGenie.git
+cd RestaurantGenie
+uv sync
+./predict.sh "900 N Michigan Ave, Chicago IL" italian 3
+```
+
+That's it. No API keys, no database, no dataset download required. Features are computed live from OpenStreetMap and US Census at query time.
+
 ---
 
 ## Installation
@@ -21,12 +34,6 @@ Demographic lookups work without a key but are rate-limited. For faster dataset 
 ```bash
 export CENSUS_API_KEY=your_key_here
 ```
-
----
-
-## Quick start (model already trained)
-
-The trained model is included in `models/`. Skip to [Predicting](#predicting) if you just want to run predictions.
 
 ---
 
